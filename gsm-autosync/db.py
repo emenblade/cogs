@@ -19,6 +19,7 @@ def create_schema_if_missing(db_path: str) -> None:
 
     Safe to call on an existing DiscordGSM database — uses IF NOT EXISTS.
     """
+    conn = None
     try:
         conn = sqlite3.connect(db_path, timeout=_TIMEOUT)
         conn.execute("""
@@ -39,9 +40,11 @@ def create_schema_if_missing(db_path: str) -> None:
             )
         """)
         conn.commit()
-        conn.close()
     except sqlite3.OperationalError as e:
         log.error("Failed to create schema: %s", e)
+    finally:
+        if conn:
+            conn.close()
 
 
 def insert_server(db_path: str, data: dict) -> int | None:
@@ -51,6 +54,7 @@ def insert_server(db_path: str, data: dict) -> int | None:
                query_extra (str), style_data (str JSON)
     Returns the new row id, or None on failure.
     """
+    conn = None
     try:
         conn = sqlite3.connect(db_path, timeout=_TIMEOUT)
         conn.row_factory = sqlite3.Row
@@ -80,11 +84,13 @@ def insert_server(db_path: str, data: dict) -> int | None:
         log.error("Failed to insert server row: %s", e)
         return None
     finally:
-        conn.close()
+        if conn:
+            conn.close()
 
 
 def delete_server_by_id(db_path: str, row_id: int) -> None:
     """Delete a server row by its primary key id."""
+    conn = None
     try:
         conn = sqlite3.connect(db_path, timeout=_TIMEOUT)
         with conn:
@@ -92,21 +98,25 @@ def delete_server_by_id(db_path: str, row_id: int) -> None:
     except sqlite3.OperationalError as e:
         log.error("Failed to delete server row id=%s: %s", row_id, e)
     finally:
-        conn.close()
+        if conn:
+            conn.close()
 
 
 def get_server_by_id(db_path: str, row_id: int) -> dict | None:
     """Return a server row as a dict, or None if not found."""
+    conn = None
     try:
         conn = sqlite3.connect(db_path, timeout=_TIMEOUT)
         conn.row_factory = sqlite3.Row
         cur = conn.execute("SELECT * FROM servers WHERE id = ?", (row_id,))
         row = cur.fetchone()
-        conn.close()
         return dict(row) if row else None
     except sqlite3.OperationalError as e:
         log.error("Failed to get server row id=%s: %s", row_id, e)
         return None
+    finally:
+        if conn:
+            conn.close()
 
 
 def is_db_writable(db_path: str) -> bool:
