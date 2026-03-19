@@ -22,7 +22,7 @@ Readme: https://github.com/PhasecoreX/docker-red-discordbot</Overview>
   <WebUI/>
   <TemplateURL>https://raw.githubusercontent.com/selfhosters/unRAID-CA-templates/master/templates/red-discordbot.xml</TemplateURL>
   <Icon>https://raw.githubusercontent.com/selfhosters/unRAID-CA-templates/master/templates/img/red-discordbot.png</Icon>
-  <ExtraParams>-v /var/run/docker.sock:/var/run/docker.sock</ExtraParams>
+  <ExtraParams/>
   <PostArgs/>
   <CPUset/>
   <DateInstalled>1770955724</DateInstalled>
@@ -35,5 +35,6 @@ Readme: https://github.com/PhasecoreX/docker-red-discordbot</Overview>
   <Config Name="PUID" Target="PUID" Default="99" Mode="" Description="" Type="Variable" Display="advanced" Required="false" Mask="false">99</Config>
   <Config Name="PGID" Target="PGID" Default="100" Mode="" Description="" Type="Variable" Display="advanced" Required="false" Mask="false">100</Config>
   <Config Name="Data" Target="/data" Default="/mnt/user/appdata/redbot" Mode="rw" Description="" Type="Path" Display="advanced" Required="false" Mask="false">/mnt/user/appdata/redbot</Config>
+  <Config Name="Docker Socket" Target="/var/run/docker.sock" Default="/var/run/docker.sock" Mode="rw" Description="Docker socket — required for gsm-autosync to detect container start/stop events." Type="Path" Display="always" Required="true" Mask="false">/var/run/docker.sock</Config>
   <Config Name="DiscordGSM AppData" Target="/discordgsm" Default="/mnt/user/appdata/discordgsm" Mode="rw" Description="Path to DiscordGSM appdata folder. Required for the gsm-autosync cog to read/write servers.db." Type="Path" Display="always" Required="false" Mask="false">/mnt/user/appdata/discordgsm</Config>
 </Container>
