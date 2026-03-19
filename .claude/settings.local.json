@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:docs.discord.red)",
+      "WebSearch",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:discordgsm.com)",
+      "WebFetch(domain:api.github.com)",
+      "Bash(python -m pytest tests/test_game_map.py -v)",
+      "Bash(python:*)",
+      "Bash(python3:*)"
+    ]
+  }
+}
