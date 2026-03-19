@@ -15,7 +15,7 @@ from redbot.core.bot import Red
 
 from .db import insert_server, delete_server_by_id, get_server_by_id, is_db_writable, create_schema_if_missing
 from .docker_listener import DockerListener
-from .game_map import get_game_info, GAME_MAP
+from .game_map import get_game_info
 
 log = logging.getLogger("red.gsm-autosync")
 
@@ -34,12 +34,13 @@ DEFAULT_STYLE_DATA = {
 class ContainerSelectView(discord.ui.View):
     """Discord UI View for selecting which containers to monitor."""
 
-    def __init__(self, containers: list[dict], guild_data: dict, timeout: float = 120):
+    def __init__(self, containers: list[dict], guild_data: dict, invoking_user: discord.Member, timeout: float = 120):
         """
         containers: list of {name, known: bool, info: dict|None}
         guild_data: current guild config dict
         """
         super().__init__(timeout=timeout)
+        self.invoking_user = invoking_user
         self.containers = containers
         self.guild_data = guild_data
         self.confirmed = False
@@ -91,6 +92,14 @@ class ContainerSelectView(discord.ui.View):
         self.stop()
         await interaction.response.send_message("Scan cancelled.", ephemeral=True)
 
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user != self.invoking_user:
+            await interaction.response.send_message(
+                "Only the person who ran this command can use this menu.", ephemeral=True
+            )
+            return False
+        return True
+
 
 class GsmAutoSync(commands.Cog):
     """Auto-sync game server containers to DiscordGSM."""
@@ -115,7 +124,7 @@ class GsmAutoSync(commands.Cog):
         self._listener = DockerListener(
             on_start=self._on_container_start,
             on_stop=self._on_container_stop,
-            loop=asyncio.get_event_loop(),
+            loop=asyncio.get_running_loop(),
         )
 
         if not DockerListener.docker_available():
@@ -404,8 +413,8 @@ class GsmAutoSync(commands.Cog):
                 inline=False,
             )
 
-        view = ContainerSelectView(containers, guild_data)
-        msg = await ctx.send(embed=embed, view=view)
+        view = ContainerSelectView(containers, guild_data, invoking_user=ctx.author)
+        await ctx.send(embed=embed, view=view)
         await view.wait()
 
         if not view.confirmed:
@@ -415,7 +424,7 @@ class GsmAutoSync(commands.Cog):
 
         # Prompt for game_id + port for any selected unknown containers
         custom_additions = {}
-        for name in selected:
+        for name in list(selected):
             info = self._resolve_game_info(name, guild_data)
             if info is None:
                 await ctx.send(
@@ -474,6 +483,15 @@ class GsmAutoSync(commands.Cog):
         # Remove rows for deselected containers
         for name, row_id in list(tracked.items()):
             if name not in selected:
+                # Save style_data before deleting (preserves user edits)
+                row = get_server_by_id(db_path, row_id)
+                if row and row.get("style_data"):
+                    try:
+                        style = json.loads(row["style_data"])
+                        async with self.config.guild(ctx.guild).saved_style_data() as saved:
+                            saved[name] = style
+                    except (json.JSONDecodeError, TypeError):
+                        pass
                 delete_server_by_id(db_path, row_id)
                 async with self.config.guild(ctx.guild).tracked_rows() as tr:
                     tr.pop(name, None)
