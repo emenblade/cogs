@@ -97,24 +97,30 @@ class DockerListener(threading.Thread):
     def docker_available() -> bool:
         if not DOCKER_AVAILABLE:
             return False
+        client = None
         try:
             client = docker.from_env()
             client.ping()
-            client.close()
             return True
         except Exception:
             return False
+        finally:
+            if client:
+                try:
+                    client.close()
+                except Exception:
+                    pass
 
     @staticmethod
     def get_container_ip(container_name: str) -> str | None:
         """Return the bridge network IP for a container, or None."""
         if not DOCKER_AVAILABLE:
             return None
+        client = None
         try:
             client = docker.from_env()
             container = client.containers.get(container_name)
             networks = container.attrs["NetworkSettings"]["Networks"]
-            client.close()
             # Prefer bridge network; fall back to first available
             if "bridge" in networks:
                 return networks["bridge"]["IPAddress"] or None
@@ -126,18 +132,30 @@ class DockerListener(threading.Thread):
         except Exception as e:
             log.error("Failed to get IP for container %s: %s", container_name, e)
             return None
+        finally:
+            if client:
+                try:
+                    client.close()
+                except Exception:
+                    pass
 
     @staticmethod
     def list_running_containers() -> list[str]:
         """Return names of all currently running containers."""
         if not DOCKER_AVAILABLE:
             return []
+        client = None
         try:
             client = docker.from_env()
             containers = client.containers.list()
             names = [c.name for c in containers]
-            client.close()
             return names
         except Exception as e:
             log.error("Failed to list containers: %s", e)
             return []
+        finally:
+            if client:
+                try:
+                    client.close()
+                except Exception:
+                    pass
