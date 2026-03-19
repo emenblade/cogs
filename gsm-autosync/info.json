@@ -1,0 +1,12 @@
+{
+    "author": ["emenblade"],
+    "description": "Watches Docker for game server containers and automatically adds/removes them from DiscordGSM's database. Requires /var/run/docker.sock mounted in the Red bot container.",
+    "short": "Auto-sync game servers to DiscordGSM",
+    "install_msg": "Before loading: ensure /var/run/docker.sock is mounted in your Red bot container, and your DiscordGSM appdata is mounted at /discordgsm. Then run `[p]gsmsetup channel #your-channel` followed by `[p]gsmsetup scan`.",
+    "end_user_data_statement": "This cog stores per-guild configuration including channel IDs, database paths, container mappings, and style preferences. No user personal data is stored.",
+    "min_bot_version": "3.5.0",
+    "min_python_version": [3, 10, 0],
+    "requirements": ["docker"],
+    "tags": ["docker", "gameserver", "discordgsm", "unraid"],
+    "type": "COG"
+}
