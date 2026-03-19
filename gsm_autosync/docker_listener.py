@@ -14,12 +14,6 @@ import asyncio
 
 log = logging.getLogger("red.gsm-autosync.docker_listener")
 
-try:
-    import docker
-    DOCKER_AVAILABLE = True
-except ImportError:
-    DOCKER_AVAILABLE = False
-
 
 class DockerListener(threading.Thread):
     """Streams Docker container events in a background thread.
@@ -43,12 +37,14 @@ class DockerListener(threading.Thread):
         self._running = False
 
     def run(self):
-        if not DOCKER_AVAILABLE:
+        try:
+            import docker as _docker
+        except ImportError:
             log.error("docker package not installed")
             return
 
         try:
-            self._client = docker.from_env()
+            self._client = _docker.from_env()
         except Exception as e:
             log.error("Failed to connect to Docker socket: %s", e)
             return
@@ -87,7 +83,8 @@ class DockerListener(threading.Thread):
                 self._client.close()
             except Exception:
                 pass
-        self.join(timeout=5)
+        if self.is_alive():
+            self.join(timeout=5)
 
     @property
     def is_connected(self) -> bool:
@@ -95,11 +92,10 @@ class DockerListener(threading.Thread):
 
     @staticmethod
     def docker_available() -> bool:
-        if not DOCKER_AVAILABLE:
-            return False
         client = None
         try:
-            client = docker.from_env()
+            import docker as _docker
+            client = _docker.from_env()
             client.ping()
             return True
         except Exception:
@@ -114,11 +110,10 @@ class DockerListener(threading.Thread):
     @staticmethod
     def get_container_ip(container_name: str) -> str | None:
         """Return the bridge network IP for a container, or None."""
-        if not DOCKER_AVAILABLE:
-            return None
         client = None
         try:
-            client = docker.from_env()
+            import docker as _docker
+            client = _docker.from_env()
             container = client.containers.get(container_name)
             networks = container.attrs["NetworkSettings"]["Networks"]
             # Prefer bridge network; fall back to first available
@@ -142,11 +137,10 @@ class DockerListener(threading.Thread):
     @staticmethod
     def list_running_containers() -> list[str]:
         """Return names of all currently running containers."""
-        if not DOCKER_AVAILABLE:
-            return []
         client = None
         try:
-            client = docker.from_env()
+            import docker as _docker
+            client = _docker.from_env()
             containers = client.containers.list()
             names = [c.name for c in containers]
             return names
