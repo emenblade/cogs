@@ -1,1 +1,8 @@
 my-red-discordbot.xml
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.coverage
+.venv/
+venv/
