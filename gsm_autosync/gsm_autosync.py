@@ -222,6 +222,11 @@ class GsmAutoSync(commands.Cog):
             async with self.config.guild(guild).tracked_rows() as tracked:
                 tracked[container_name] = row_id
             log.info("Inserted row id=%s for container %s (guild %s)", row_id, container_name, guild.id)
+            channel = guild.get_channel(channel_id)
+            if channel:
+                await channel.send(
+                    f"🟢 `{container_name}` detected — added to DiscordGSM. Run `/refresh` to generate the card."
+                )
 
     async def _on_container_start(self, container_name: str, container_id: str):
         """Called by DockerListener when a container starts."""
@@ -277,6 +282,11 @@ class GsmAutoSync(commands.Cog):
                 tracked_mut.pop(container_name, None)
 
             log.info("Deleted row id=%s for container %s (guild %s)", row_id, container_name, guild.id)
+            channel = guild.get_channel(guild_data.get("channel_id"))
+            if channel:
+                await channel.send(
+                    f"🔴 `{container_name}` stopped — removed from DiscordGSM."
+                )
 
     # -------------------------------------------------------------------------
     # Setup commands
