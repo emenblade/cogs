@@ -135,6 +135,31 @@ class DockerListener(threading.Thread):
                     pass
 
     @staticmethod
+    def get_container_host_port(container_name: str, internal_port: int) -> int | None:
+        """Return the host-mapped port for a container's internal port (TCP or UDP)."""
+        client = None
+        try:
+            import docker as _docker
+            client = _docker.from_env()
+            container = client.containers.get(container_name)
+            for proto in ("tcp", "udp"):
+                bindings = container.ports.get(f"{internal_port}/{proto}")
+                if bindings:
+                    host_port = bindings[0].get("HostPort")
+                    if host_port:
+                        return int(host_port)
+            return None
+        except Exception as e:
+            log.error("Failed to get host port for %s:%s: %s", container_name, internal_port, e)
+            return None
+        finally:
+            if client:
+                try:
+                    client.close()
+                except Exception:
+                    pass
+
+    @staticmethod
     def get_container_ip(container_name: str) -> str | None:
         """Return the bridge network IP for a container, or None."""
         client = None
