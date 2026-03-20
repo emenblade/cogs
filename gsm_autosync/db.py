@@ -68,7 +68,7 @@ def insert_server(db_path: str, data: dict) -> int | None:
                     (position, guild_id, channel_id, message_id, game_id,
                      address, query_port, query_extra, status, result,
                      style_id, style_data)
-                VALUES (?, ?, ?, NULL, ?, ?, ?, ?, 1, '{}', 'Large', ?)
+                VALUES (?, ?, ?, NULL, ?, ?, ?, ?, 1, '{"raw": {}}', 'Large', ?)
             """, (
                 position,
                 data["guild_id"],
