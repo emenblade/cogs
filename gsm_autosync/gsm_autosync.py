@@ -194,6 +194,14 @@ class GsmAutoSync(commands.Cog):
         if container_name in saved_styles:
             style_data.update(saved_styles[container_name])
 
+        exposed_ports = DockerListener.get_container_exposed_ports(container_name)
+        if exposed_ports and info["query_port"] not in exposed_ports:
+            log.info(
+                "Container %s does not expose port %s (exposed: %s), skipping insert",
+                container_name, info["query_port"], exposed_ports,
+            )
+            return
+
         ip = DockerListener.get_container_ip(container_name)
         if not ip:
             log.warning("Could not get IP for container %s, skipping insert", container_name)
@@ -363,7 +371,7 @@ class GsmAutoSync(commands.Cog):
         listener_ok = self._listener is not None and self._listener.is_connected
 
         lines = [
-            f"{'✅' if docker_ok else '❌'} Docker socket: {'reachable' if docker_ok else 'NOT reachable — mount /var/run/docker.sock'}",
+            f"{'✅' if docker_ok else '❌'} Docker socket: {'reachable' if docker_ok else 'NOT reachable — ensure /var/run/docker.sock is mounted and run `chmod 666 /var/run/docker.sock` on the host'}",
             f"{'✅' if db_ok else '❌'} DB at `{db_path}`: {'writable' if db_ok else 'NOT writable — check path and container mount'}",
             f"{'✅' if listener_ok else '❌'} Event listener: {'running' if listener_ok else 'not running'}",
         ]

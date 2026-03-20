@@ -109,6 +109,32 @@ class DockerListener(threading.Thread):
                     pass
 
     @staticmethod
+    def get_container_exposed_ports(container_name: str) -> set[int]:
+        """Return the set of internal ports exposed by a container (TCP and UDP)."""
+        client = None
+        try:
+            import docker as _docker
+            client = _docker.from_env()
+            container = client.containers.get(container_name)
+            ports = container.attrs.get("NetworkSettings", {}).get("Ports", {})
+            result = set()
+            for port_proto in ports:
+                try:
+                    result.add(int(port_proto.split("/")[0]))
+                except ValueError:
+                    pass
+            return result
+        except Exception as e:
+            log.error("Failed to get exposed ports for container %s: %s", container_name, e)
+            return set()
+        finally:
+            if client:
+                try:
+                    client.close()
+                except Exception:
+                    pass
+
+    @staticmethod
     def get_container_ip(container_name: str) -> str | None:
         """Return the bridge network IP for a container, or None."""
         client = None
