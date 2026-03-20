@@ -98,7 +98,8 @@ class DockerListener(threading.Thread):
             client = _docker.from_env()
             client.ping()
             return True
-        except Exception:
+        except Exception as e:
+            log.error("docker_available() failed: %s", e, exc_info=True)
             return False
         finally:
             if client:
