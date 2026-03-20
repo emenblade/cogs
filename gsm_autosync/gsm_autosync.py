@@ -204,24 +204,12 @@ class GsmAutoSync(commands.Cog):
             )
             return
 
-        connect_host = guild_data.get("connect_host")
-        if connect_host:
-            host_port = DockerListener.get_container_host_port(container_name, info["query_port"])
-            if not host_port:
-                log.warning(
-                    "connect_host set but no host port mapping found for %s:%s, skipping insert",
-                    container_name, info["query_port"],
-                )
-                return
-            address = connect_host
-            query_port = host_port
-        else:
-            ip = DockerListener.get_container_ip(container_name)
-            if not ip:
-                log.warning("Could not get IP for container %s, skipping insert", container_name)
-                return
-            address = ip
-            query_port = info["query_port"]
+        ip = DockerListener.get_container_ip(container_name)
+        if not ip:
+            log.warning("Could not get IP for container %s, skipping insert", container_name)
+            return
+        address = ip
+        query_port = info["query_port"]
 
         # Always include password in query_extra — DiscordGSM's /refresh requires it
         query_extra = dict(info.get("query_extra", {}))
