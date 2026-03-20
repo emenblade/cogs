@@ -110,6 +110,8 @@ class GsmAutoSync(commands.Cog):
 
         self.config.register_guild(
             channel_id=None,          # Discord channel for GSM cards
+            admin_channel_id=None,    # Discord channel for cog notifications (defaults to channel_id)
+            connect_host=None,        # Hostname/IP for player connect address (e.g. game.emen.win)
             db_path=_DEFAULT_DB_PATH, # Path to servers.db inside container
             custom_games={},          # {container_name: {game_id, query_port, display_name}}
             monitored=None,           # Set of container names to monitor (None = use game_map defaults)
@@ -202,19 +204,37 @@ class GsmAutoSync(commands.Cog):
             )
             return
 
-        ip = DockerListener.get_container_ip(container_name)
-        if not ip:
-            log.warning("Could not get IP for container %s, skipping insert", container_name)
-            return
+        connect_host = guild_data.get("connect_host")
+        if connect_host:
+            host_port = DockerListener.get_container_host_port(container_name, info["query_port"])
+            if not host_port:
+                log.warning(
+                    "connect_host set but no host port mapping found for %s:%s, skipping insert",
+                    container_name, info["query_port"],
+                )
+                return
+            address = connect_host
+            query_port = host_port
+        else:
+            ip = DockerListener.get_container_ip(container_name)
+            if not ip:
+                log.warning("Could not get IP for container %s, skipping insert", container_name)
+                return
+            address = ip
+            query_port = info["query_port"]
+
+        # Always include password in query_extra — DiscordGSM's /refresh requires it
+        query_extra = dict(info.get("query_extra", {}))
+        query_extra.setdefault("password", "")
 
         create_schema_if_missing(db_path)
         row_id = insert_server(db_path, {
             "guild_id": guild.id,
             "channel_id": channel_id,
             "game_id": info["game_id"],
-            "address": ip,
-            "query_port": info["query_port"],
-            "query_extra": json.dumps(info.get("query_extra", {})),
+            "address": address,
+            "query_port": query_port,
+            "query_extra": json.dumps(query_extra),
             "style_data": json.dumps(style_data),
         })
 
@@ -222,9 +242,10 @@ class GsmAutoSync(commands.Cog):
             async with self.config.guild(guild).tracked_rows() as tracked:
                 tracked[container_name] = row_id
             log.info("Inserted row id=%s for container %s (guild %s)", row_id, container_name, guild.id)
-            channel = guild.get_channel(channel_id)
-            if channel:
-                await channel.send(
+            admin_ch_id = guild_data.get("admin_channel_id") or channel_id
+            admin_ch = guild.get_channel(admin_ch_id)
+            if admin_ch:
+                await admin_ch.send(
                     f"🟢 `{container_name}` detected — added to DiscordGSM. Run `/refresh` to generate the card."
                 )
 
@@ -282,9 +303,10 @@ class GsmAutoSync(commands.Cog):
                 tracked_mut.pop(container_name, None)
 
             log.info("Deleted row id=%s for container %s (guild %s)", row_id, container_name, guild.id)
-            channel = guild.get_channel(guild_data.get("channel_id"))
-            if channel:
-                await channel.send(
+            admin_ch_id = guild_data.get("admin_channel_id") or guild_data.get("channel_id")
+            admin_ch = guild.get_channel(admin_ch_id)
+            if admin_ch:
+                await admin_ch.send(
                     f"🔴 `{container_name}` stopped — removed from DiscordGSM."
                 )
 
@@ -303,6 +325,29 @@ class GsmAutoSync(commands.Cog):
         """Set the Discord channel where DiscordGSM posts status cards."""
         await self.config.guild(ctx.guild).channel_id.set(channel.id)
         await ctx.send(f"GSM channel set to {channel.mention}.")
+
+    @gsmsetup.command(name="adminchannel")
+    async def gsmsetup_adminchannel(self, ctx: commands.Context, channel: discord.TextChannel):
+        """Set the channel where the cog posts notifications (container start/stop).
+
+        Defaults to the GSM cards channel if not set.
+        """
+        await self.config.guild(ctx.guild).admin_channel_id.set(channel.id)
+        await ctx.send(f"Admin notifications channel set to {channel.mention}.")
+
+    @gsmsetup.command(name="connecthost")
+    async def gsmsetup_connecthost(self, ctx: commands.Context, hostname: str = None):
+        """Set the hostname players use to connect (e.g. game.emen.win).
+
+        When set, the cog uses this hostname + the container's host-mapped port
+        as the query address instead of the internal bridge IP.
+        Run without arguments to clear.
+        """
+        await self.config.guild(ctx.guild).connect_host.set(hostname or None)
+        if hostname:
+            await ctx.send(f"Connect host set to `{hostname}`.")
+        else:
+            await ctx.send("Connect host cleared — will use bridge IP for queries.")
 
     @gsmsetup.command(name="dbpath")
     async def gsmsetup_dbpath(self, ctx: commands.Context, path: str):
@@ -357,12 +402,15 @@ class GsmAutoSync(commands.Cog):
         """Show the current gsm-autosync configuration for this server."""
         data = await self.config.guild(ctx.guild).all()
         channel = ctx.guild.get_channel(data["channel_id"]) if data["channel_id"] else None
+        admin_ch = ctx.guild.get_channel(data["admin_channel_id"]) if data.get("admin_channel_id") else None
         tracked = data.get("tracked_rows", {})
         custom = data.get("custom_games", {})
         monitored = data.get("monitored")
 
         lines = [
-            f"**Channel:** {channel.mention if channel else 'Not set'}",
+            f"**GSM Channel:** {channel.mention if channel else 'Not set'}",
+            f"**Admin Channel:** {admin_ch.mention if admin_ch else f'Not set (defaults to GSM channel)'}",
+            f"**Connect Host:** `{data.get('connect_host') or 'Not set (uses bridge IP)'}` ",
             f"**DB Path:** `{data['db_path']}`",
             f"**Tracked containers:** {', '.join(f'`{k}`' for k in tracked) or 'none'}",
             f"**Custom mappings:** {', '.join(f'`{k}`' for k in custom) or 'none'}",

@@ -1,59 +1,56 @@
 """
 Container name → DiscordGSM game info lookup table.
 
-game_id strings verified against DiscordGSM's supported games list.
-query_port is the UDP query port (not the game port).
-query_extra is passed directly to DiscordGSM — {} is correct for all listed games.
+game_id strings verified against DiscordGSM's supported games list (v2.20).
+CoreKeeper and Don't Starve Together are NOT supported by DiscordGSM and are
+excluded. Use `!gsmsetup addgame` to manually map unsupported containers.
 """
 
 GAME_MAP = {
     "satisfactory": {
         "game_id": "satisfactory",
         "query_port": 15777,
-        "query_extra": {},
         "display_name": "Satisfactory",
     },
     "v-rising": {
         "game_id": "vrising",
         "query_port": 9877,
-        "query_extra": {},
         "display_name": "V Rising",
     },
-    "corekeeper": {
-        "game_id": "corekeeper",
-        "query_port": 27016,
-        "query_extra": {},
-        "display_name": "Core Keeper",
-    },
-    "dontstarvetogether": {
-        "game_id": "dst",
-        "query_port": 27016,
-        "query_extra": {},
-        "display_name": "Don't Starve Together",
+    "vrising": {
+        "game_id": "vrising",
+        "query_port": 9877,
+        "display_name": "V Rising",
     },
     "valheim": {
         "game_id": "valheim",
         "query_port": 2457,
-        "query_extra": {},
         "display_name": "Valheim",
     },
     "minecraftbasicserver": {
         "game_id": "minecraft",
         "query_port": 25565,
-        "query_extra": {},
         "display_name": "Minecraft",
     },
     "binhex-minecraftserver": {
         "game_id": "minecraft",
         "query_port": 25565,
-        "query_extra": {},
         "display_name": "Minecraft",
     },
     "minecraft-forge": {
         "game_id": "minecraft",
         "query_port": 25565,
-        "query_extra": {},
         "display_name": "Minecraft (Forge)",
+    },
+    "killingfloor2": {
+        "game_id": "killingfloor2",
+        "query_port": 27015,
+        "display_name": "Killing Floor 2",
+    },
+    "kf2": {
+        "game_id": "killingfloor2",
+        "query_port": 27015,
+        "display_name": "Killing Floor 2",
     },
 }
 
