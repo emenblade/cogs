@@ -82,7 +82,7 @@ class TestSendOrAttach:
         await send_or_attach(dest, long_content, filename="t.txt", threshold=1900)
         dest.send.assert_called_once()
         call_kwargs = dest.send.call_args
-        assert call_kwargs.kwargs.get("file") is not None or len(call_kwargs.args) > 0
+        assert isinstance(call_kwargs.kwargs.get("file"), discord.File)
 
 
 class TestCheckStaffRole:
@@ -103,3 +103,8 @@ class TestCheckStaffRole:
     def test_returns_false_when_role_id_is_none(self):
         interaction = MagicMock()
         assert check_staff_role(interaction, None) is False
+
+    def test_returns_false_when_user_has_no_roles_attr(self):
+        interaction = MagicMock()
+        interaction.user = MagicMock(spec=discord.User)  # discord.User has no .roles
+        assert check_staff_role(interaction, 999) is False

@@ -47,4 +47,7 @@ def check_staff_role(interaction: discord.Interaction, role_id: int | None) -> b
     """Return True if the interaction member has the given role ID."""
     if role_id is None:
         return False
-    return any(r.id == role_id for r in interaction.user.roles)
+    roles = getattr(interaction.user, "roles", None)
+    if not roles:
+        return False
+    return any(r.id == role_id for r in roles)
