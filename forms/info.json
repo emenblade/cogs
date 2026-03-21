@@ -1,0 +1,10 @@
+{
+  "name": "Forms",
+  "short": "Tickets and application forms, Discord-native.",
+  "description": "A fully GUI-driven tickets and applications system for RedBot. No web dashboard — everything happens inside Discord.",
+  "author": ["emenblade"],
+  "install_msg": "Load with `[p]load forms`, then run `[p]forms setup` to configure.",
+  "min_bot_version": "3.5.0",
+  "min_python_version": [3, 8, 0],
+  "end_user_data_statement": "This cog stores application answers, ticket transcripts, and per-user state linked to Discord user IDs. Data can be deleted on request via `[p]mydata forgetme`."
+}
