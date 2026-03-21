@@ -282,7 +282,8 @@ class ApplicationManager:
         from .views import ReviewView
 
         guild_conf = self.config.guild(guild)
-        forum_id = await guild_conf.ticket_forum()
+        # Use dedicated application forum if configured, fall back to ticket forum
+        forum_id = await guild_conf.application_forum() or await guild_conf.ticket_forum()
         app_tag_id = await guild_conf.application_tag_id()
 
         forum = guild.get_channel(forum_id) if forum_id else None

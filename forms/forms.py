@@ -26,9 +26,11 @@ class Forms(commands.Cog):
             ticket_user_role=None,
             ticket_staff_role=None,
             ticket_forum=None,
+            application_forum=None,
             ticket_categories=[],
             ticket_counter=0,
             ticket_panel_message=None,
+            application_panel_message=None,
             ticket_max_open=3,
             ticket_tag_id=None,
             application_tag_id=None,
@@ -51,7 +53,7 @@ class Forms(commands.Cog):
 
     async def _register_persistent_views(self) -> None:
         """Re-register all persistent views after bot restart."""
-        from .views import TicketPanelView, CloseTicketView, ApplyView, ReviewView, ResetCooldownView
+        from .views import TicketPanelView, CloseTicketView, ApplyView, ReviewView, ResetCooldownView, ApplicationPanelView
 
         all_guild_data = await self.config.all_guilds()
 
@@ -64,6 +66,14 @@ class Forms(commands.Cog):
                 self.bot.add_view(
                     TicketPanelView(self.config, self.bot),
                     message_id=panel_msg_id,
+                )
+
+            # Application panel
+            app_panel_msg_id = guild_data.get("application_panel_message")
+            if app_panel_msg_id:
+                self.bot.add_view(
+                    ApplicationPanelView(self.config, self.bot),
+                    message_id=app_panel_msg_id,
                 )
 
             # Application panels

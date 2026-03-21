@@ -207,12 +207,17 @@ class WizardStep7View(_WizardStepView):
         await interaction.response.edit_message(content="❌ Setup cancelled.", view=None, embed=None)
 
 
-async def _ensure_forum_tags(forum: discord.ForumChannel, config: Config, guild_id: int) -> None:
-    """Create TICKET and APPLICATION tags if they don't exist; store IDs in config."""
+async def _ensure_ticket_forum_tags(forum: discord.ForumChannel, config: Config, guild_id: int) -> None:
+    """Create TICKET tag in the ticket forum if it doesn't exist; store ID in config."""
     existing = {t.name: t for t in forum.available_tags}
     ticket_tag = existing.get("TICKET") or await forum.create_tag(name="TICKET")
-    app_tag = existing.get("APPLICATION") or await forum.create_tag(name="APPLICATION")
     await config.guild_from_id(guild_id).ticket_tag_id.set(ticket_tag.id)
+
+
+async def _ensure_application_forum_tags(forum: discord.ForumChannel, config: Config, guild_id: int) -> None:
+    """Create APPLICATION tag in the application forum if it doesn't exist; store ID in config."""
+    existing = {t.name: t for t in forum.available_tags}
+    app_tag = existing.get("APPLICATION") or await forum.create_tag(name="APPLICATION")
     await config.guild_from_id(guild_id).application_tag_id.set(app_tag.id)
 
 
@@ -250,7 +255,7 @@ async def _send_wizard_step5(interaction: discord.Interaction, config: Config, g
     view = WizardStep5View(config, guild_id, bot)
     embed = discord.Embed(
         title="Forms Setup — Step 5 of 7",
-        description="Select the **forum channel** where ticket and application transcripts will be archived.",
+        description="Select the **forum channel** where **ticket** transcripts will be archived.\n\nYou can set a separate application forum later via Settings → Applications.",
         color=discord.Color.blurple(),
     )
     await interaction.response.edit_message(embed=embed, view=view)
@@ -259,7 +264,7 @@ async def _send_wizard_step5(interaction: discord.Interaction, config: Config, g
 async def _send_wizard_step6(
     interaction: discord.Interaction, config: Config, guild_id: int, bot, forum: discord.ForumChannel
 ) -> None:
-    await _ensure_forum_tags(forum, config, guild_id)
+    await _ensure_ticket_forum_tags(forum, config, guild_id)
     embed = discord.Embed(
         title="Forms Setup — Step 6 of 7",
         description="✅ Forum tags created: **TICKET** and **APPLICATION**.\n\nClick **Next** to set up ticket categories.",
@@ -445,6 +450,96 @@ class CreateApplicationModal(discord.ui.Modal, title="Create Application"):
             "Check your DMs — I'll walk you through adding questions.",
             ephemeral=True,
         )
+
+
+class ApplicationPanelView(discord.ui.View):
+    """Persistent panel that lets users browse and start applications for this guild."""
+
+    def __init__(self, config: Config, bot):
+        super().__init__(timeout=None)
+        self.config = config
+        self.bot = bot
+
+    @discord.ui.button(
+        label="📋 Browse Applications",
+        style=discord.ButtonStyle.green,
+        custom_id="forms:app_panel:browse",
+    )
+    async def browse(self, interaction: discord.Interaction, button: discord.ui.Button):
+        import time
+        from .applications import ApplicationManager
+        from redbot.core.data_manager import cog_data_path
+
+        active = await self.config.user(interaction.user).active_application()
+        if active is not None:
+            await interaction.response.send_message(
+                "You already have an application in progress. Please complete it first.",
+                ephemeral=True,
+            )
+            return
+
+        assignments = await self.config.guild(interaction.guild).application_assignments()
+        if not assignments:
+            await interaction.response.send_message(
+                "There are no open applications at this time.", ephemeral=True
+            )
+            return
+
+        manager = ApplicationManager(
+            interaction.client,
+            self.config,
+            cog_data_path(interaction.client.cogs["Forms"]),
+        )
+        apps = await manager.load_applications()
+
+        options = []
+        for slug, assignment in assignments.items():
+            app = apps.get(slug)
+            if app:
+                options.append(discord.SelectOption(
+                    label=app["name"],
+                    value=slug,
+                    description=app.get("description", "")[:100],
+                ))
+
+        if not options:
+            await interaction.response.send_message(
+                "There are no open applications at this time.", ephemeral=True
+            )
+            return
+
+        view = _SingleSelectView(options, placeholder="Select an application…")
+        await interaction.response.send_message(
+            "Select an application to begin:", view=view, ephemeral=True
+        )
+        await view.wait()
+        if not view.selected:
+            return
+
+        slug = view.selected
+        cooldowns = await self.config.user(interaction.user).application_cooldowns()
+        expiry = cooldowns.get(slug)
+        if expiry and time.time() < expiry:
+            remaining = int(expiry - time.time())
+            days, rem = divmod(remaining, 86400)
+            hours = rem // 3600
+            await interaction.followup.send(
+                f"You can re-apply in {days}d {hours}h.", ephemeral=True
+            )
+            return
+
+        try:
+            dm = await interaction.user.create_dm()
+        except discord.Forbidden:
+            await interaction.followup.send(
+                "Please enable DMs from server members to apply.", ephemeral=True
+            )
+            return
+
+        await interaction.followup.send(
+            "✅ Check your DMs! Your application has begun.", ephemeral=True
+        )
+        await manager.start_application(interaction.user, interaction.guild, slug, dm)
 
 
 class ApplyView(discord.ui.View):
@@ -834,6 +929,24 @@ class ConfirmView(discord.ui.View):
         self.stop()
 
 
+class _ForumSelectStepView(discord.ui.View):
+    """Single forum channel select step."""
+
+    def __init__(self):
+        super().__init__(timeout=120)
+        self.selected_forum = None
+
+    @discord.ui.select(
+        cls=discord.ui.ChannelSelect,
+        placeholder="Select a forum channel…",
+        channel_types=[discord.ChannelType.forum],
+    )
+    async def channel_select(self, interaction: discord.Interaction, select: discord.ui.ChannelSelect):
+        self.selected_forum = interaction.guild.get_channel(select.values[0].id)
+        await interaction.response.defer()
+        self.stop()
+
+
 class _ChannelSelectStepView(discord.ui.View):
     """Single channel select step used during application assignment."""
 
@@ -1045,6 +1158,53 @@ class ApplicationSettingsView(discord.ui.View):
         )
         await interaction.followup.send(
             f"✅ **{app['name']}** has been assigned to {channel_view.selected_channel.mention}!",
+            ephemeral=True,
+        )
+
+    @discord.ui.button(label="📁 Set Application Forum", style=discord.ButtonStyle.grey)
+    async def set_app_forum(self, interaction: discord.Interaction, button: discord.ui.Button):
+        view = _ForumSelectStepView()
+        await interaction.response.send_message(
+            "Select the **forum channel** where application reviews will be posted:",
+            view=view,
+            ephemeral=True,
+        )
+        await view.wait()
+        if not view.selected_forum:
+            return
+        forum = view.selected_forum
+        if not isinstance(forum, discord.ForumChannel):
+            await interaction.followup.send("That doesn't appear to be a forum channel.", ephemeral=True)
+            return
+        await self.config.guild(interaction.guild).application_forum.set(forum.id)
+        await _ensure_application_forum_tags(forum, self.config, interaction.guild.id)
+        await interaction.followup.send(
+            f"✅ Application forum set to {forum.mention}. APPLICATION tag created/confirmed.",
+            ephemeral=True,
+        )
+
+    @discord.ui.button(label="🖼️ Post Application Panel", style=discord.ButtonStyle.blurple)
+    async def post_app_panel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        view = _ChannelSelectStepView()
+        await interaction.response.send_message(
+            "Select the channel to post the application panel in:",
+            view=view,
+            ephemeral=True,
+        )
+        await view.wait()
+        if not view.selected_channel:
+            return
+        channel = view.selected_channel
+        embed = discord.Embed(
+            title="📋 Applications",
+            description="Click the button below to browse and apply for open roles.",
+            color=discord.Color.green(),
+        )
+        panel_view = ApplicationPanelView(self.config, self.bot)
+        msg = await channel.send(embed=embed, view=panel_view)
+        await self.config.guild(interaction.guild).application_panel_message.set(msg.id)
+        await interaction.followup.send(
+            f"✅ Application panel posted in {channel.mention}!",
             ephemeral=True,
         )
 
