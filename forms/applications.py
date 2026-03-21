@@ -13,4 +13,7 @@ class ApplicationManager:
         self.config = config
         self.data_path = data_path
         self._app_path = data_path / "applications"
+
+    def initialize(self) -> None:
+        """Create required data directories. Call after construction."""
         self._app_path.mkdir(parents=True, exist_ok=True)

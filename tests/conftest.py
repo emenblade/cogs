@@ -4,6 +4,15 @@ import discord
 
 
 @pytest.fixture
+def mock_config():
+    config = MagicMock()
+    config.guild = MagicMock(return_value=MagicMock())
+    config.member = MagicMock(return_value=MagicMock())
+    config.user = MagicMock(return_value=MagicMock())
+    return config
+
+
+@pytest.fixture
 def mock_bot():
     bot = MagicMock()
     bot.get_guild = MagicMock(return_value=None)

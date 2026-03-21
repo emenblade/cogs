@@ -32,6 +32,8 @@ class Forms(commands.Cog):
         pass
 
     @forms_group.command(name="settings")
+    # Permission check is dynamic (reads ticket_staff_role from Config at runtime).
+    # Enforced inside the command body, not via decorator, since the role ID is guild-specific.
     async def forms_settings(self, ctx: commands.Context) -> None:
         """Open the settings panel."""
         pass
