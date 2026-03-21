@@ -474,101 +474,12 @@ class CreateApplicationModal(discord.ui.Modal, title="Create Application"):
     async def on_submit(self, interaction: discord.Interaction):
         self.result_name = self.app_name.value.strip()
         self.result_description = self.description.value.strip()
+        self.stop()
         await interaction.response.send_message(
             f"✅ Application **{self.result_name}** created. "
             "Check your DMs — I'll walk you through adding questions.",
             ephemeral=True,
         )
-
-
-class ApplicationPanelView(discord.ui.View):
-    """Persistent panel that lets users browse and start applications for this guild."""
-
-    def __init__(self, config: Config, bot):
-        super().__init__(timeout=None)
-        self.config = config
-        self.bot = bot
-
-    @discord.ui.button(
-        label="📋 Browse Applications",
-        style=discord.ButtonStyle.green,
-        custom_id="forms:app_panel:browse",
-    )
-    async def browse(self, interaction: discord.Interaction, button: discord.ui.Button):
-        import time
-        from .applications import ApplicationManager
-        from redbot.core.data_manager import cog_data_path
-
-        active = await self.config.user(interaction.user).active_application()
-        if active is not None:
-            await interaction.response.send_message(
-                "You already have an application in progress. Please complete it first.",
-                ephemeral=True,
-            )
-            return
-
-        assignments = await self.config.guild(interaction.guild).application_assignments()
-        if not assignments:
-            await interaction.response.send_message(
-                "There are no open applications at this time.", ephemeral=True
-            )
-            return
-
-        manager = ApplicationManager(
-            interaction.client,
-            self.config,
-            cog_data_path(interaction.client.cogs["Forms"]),
-        )
-        apps = await manager.load_applications()
-
-        options = []
-        for slug, assignment in assignments.items():
-            app = apps.get(slug)
-            if app:
-                options.append(discord.SelectOption(
-                    label=app["name"],
-                    value=slug,
-                    description=app.get("description", "")[:100],
-                ))
-
-        if not options:
-            await interaction.response.send_message(
-                "There are no open applications at this time.", ephemeral=True
-            )
-            return
-
-        view = _SingleSelectView(options, placeholder="Select an application…")
-        await interaction.response.send_message(
-            "Select an application to begin:", view=view, ephemeral=True
-        )
-        await view.wait()
-        if not view.selected:
-            return
-
-        slug = view.selected
-        cooldowns = await self.config.user(interaction.user).application_cooldowns()
-        expiry = cooldowns.get(slug)
-        if expiry and time.time() < expiry:
-            remaining = int(expiry - time.time())
-            days, rem = divmod(remaining, 86400)
-            hours = rem // 3600
-            await interaction.followup.send(
-                f"You can re-apply in {days}d {hours}h.", ephemeral=True
-            )
-            return
-
-        try:
-            dm = await interaction.user.create_dm()
-        except discord.Forbidden:
-            await interaction.followup.send(
-                "Please enable DMs from server members to apply.", ephemeral=True
-            )
-            return
-
-        await interaction.followup.send(
-            "✅ Check your DMs! Your application has begun.", ephemeral=True
-        )
-        await manager.start_application(interaction.user, interaction.guild, slug, dm)
 
 
 class ApplyView(discord.ui.View):
@@ -1218,30 +1129,6 @@ class ApplicationSettingsView(discord.ui.View):
             )
         await interaction.followup.send(msg, ephemeral=True)
 
-    @discord.ui.button(label="🖼️ Post Application Panel", style=discord.ButtonStyle.blurple)
-    async def post_app_panel(self, interaction: discord.Interaction, button: discord.ui.Button):
-        view = _ChannelSelectStepView()
-        await interaction.response.send_message(
-            "Select the channel to post the application panel in:",
-            view=view,
-            ephemeral=True,
-        )
-        await view.wait()
-        if not view.selected_channel:
-            return
-        channel = view.selected_channel
-        embed = discord.Embed(
-            title="📋 Applications",
-            description="Click the button below to browse and apply for open roles.",
-            color=discord.Color.green(),
-        )
-        panel_view = ApplicationPanelView(self.config, self.bot)
-        msg = await channel.send(embed=embed, view=panel_view)
-        await self.config.guild(interaction.guild).application_panel_message.set(msg.id)
-        await interaction.followup.send(
-            f"✅ Application panel posted in {channel.mention}!",
-            ephemeral=True,
-        )
 
 
 class SettingsPanelView(discord.ui.View):

@@ -30,7 +30,7 @@ class Forms(commands.Cog):
             ticket_categories=[],
             ticket_counter=0,
             ticket_panel_message=None,
-            application_panel_message=None,
+            application_panel_message=None,  # kept for backwards compat, no longer used
             ticket_max_open=3,
             ticket_tag_id=None,
             application_tag_id=None,
@@ -53,7 +53,7 @@ class Forms(commands.Cog):
 
     async def _register_persistent_views(self) -> None:
         """Re-register all persistent views after bot restart."""
-        from .views import TicketPanelView, CloseTicketView, ApplyView, ReviewView, ResetCooldownView, ApplicationPanelView
+        from .views import TicketPanelView, CloseTicketView, ApplyView, ReviewView, ResetCooldownView
 
         all_guild_data = await self.config.all_guilds()
 
@@ -68,15 +68,7 @@ class Forms(commands.Cog):
                     message_id=panel_msg_id,
                 )
 
-            # Application panel
-            app_panel_msg_id = guild_data.get("application_panel_message")
-            if app_panel_msg_id:
-                self.bot.add_view(
-                    ApplicationPanelView(self.config, self.bot),
-                    message_id=app_panel_msg_id,
-                )
-
-            # Application panels
+            # Application panels (per-channel Apply buttons)
             assignments = guild_data.get("application_assignments", {})
             for slug, assignment in assignments.items():
                 panel_msg_id = assignment.get("panel_message_id")
@@ -161,7 +153,6 @@ class Forms(commands.Cog):
     @forms_group.command(name="settings")
     async def forms_settings(self, ctx: commands.Context) -> None:
         """Open the settings panel."""
-        # Dynamic staff role permission check
         staff_role_id = await self.config.guild(ctx.guild).ticket_staff_role()
         is_admin = ctx.author.guild_permissions.administrator
         has_staff_role = staff_role_id and any(r.id == staff_role_id for r in ctx.author.roles)
@@ -175,6 +166,28 @@ class Forms(commands.Cog):
             title="⚙️ Forms Settings",
             description="Select a section to configure:",
             color=discord.Color.blurple(),
+        )
+        await ctx.send(embed=embed, view=view)
+
+    @forms_group.command(name="apps")
+    async def forms_apps(self, ctx: commands.Context) -> None:
+        """Post the application management panel in this channel."""
+        staff_role_id = await self.config.guild(ctx.guild).ticket_staff_role()
+        is_admin = ctx.author.guild_permissions.administrator
+        has_staff_role = staff_role_id and any(r.id == staff_role_id for r in ctx.author.roles)
+        if not is_admin and not has_staff_role:
+            await ctx.send("You don't have permission to use this command.", delete_after=10)
+            return
+
+        from .views import ApplicationSettingsView
+        view = ApplicationSettingsView(self.config, self.bot)
+        embed = discord.Embed(
+            title="📋 Application Management",
+            description=(
+                "**Create** a new application template, **Edit** or **Delete** existing ones, "
+                "**Assign** an application to a channel, or configure the **Application Forum**."
+            ),
+            color=discord.Color.green(),
         )
         await ctx.send(embed=embed, view=view)
 
