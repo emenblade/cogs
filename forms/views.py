@@ -557,6 +557,9 @@ class DenyReasonModal(discord.ui.Modal, title="Denial Reason"):
             assignments[self.slug]["active_reviews"].pop(str(self.user_id), None)
             await self.config.guild(guild).application_assignments.set(assignments)
 
+        await self.thread.send(
+            f"❌ **Application denied** by {interaction.user.mention}.\n**Reason:** {self.reason.value}"
+        )
         # Respond before archiving — archiving the thread first makes the
         # interaction endpoint reject any further responses (error 50083).
         await interaction.response.send_message(
@@ -613,6 +616,9 @@ class ReviewView(discord.ui.View):
         # Clean up
         assignments[self.slug]["active_reviews"].pop(str(self.user_id), None)
         await self.config.guild(guild).application_assignments.set(assignments)
+        await interaction.channel.send(
+            f"✅ **Application approved** by {interaction.user.mention}."
+        )
         await interaction.response.send_message(
             "✅ Application approved. User notified.", ephemeral=True
         )
