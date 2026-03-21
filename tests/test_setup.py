@@ -11,8 +11,12 @@ async def test_forms_setup_sends_embed_with_view(mock_bot):
         mock_conf.register_guild = MagicMock()
         mock_conf.register_member = MagicMock()
         mock_conf.register_user = MagicMock()
+        mock_conf.all_guilds = AsyncMock(return_value={})
+        mock_conf.all_members = AsyncMock(return_value={})
         MockConfig.get_conf.return_value = mock_conf
 
+        mock_bot.add_view = MagicMock()
+        mock_bot.get_guild = MagicMock(return_value=None)
         cog = Forms(mock_bot)
         await cog.initialize()
 
@@ -36,11 +40,15 @@ async def test_forms_settings_blocked_for_non_staff(mock_bot):
         mock_conf.register_guild = MagicMock()
         mock_conf.register_member = MagicMock()
         mock_conf.register_user = MagicMock()
+        mock_conf.all_guilds = AsyncMock(return_value={})
+        mock_conf.all_members = AsyncMock(return_value={})
         guild_conf = MagicMock()
         guild_conf.ticket_staff_role = AsyncMock(return_value=999)
         mock_conf.guild = MagicMock(return_value=guild_conf)
         MockConfig.get_conf.return_value = mock_conf
 
+        mock_bot.add_view = MagicMock()
+        mock_bot.get_guild = MagicMock(return_value=None)
         cog = Forms(mock_bot)
         await cog.initialize()
 
