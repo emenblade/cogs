@@ -93,11 +93,24 @@ class Forms(commands.Cog):
         await ctx.send(embed=embed, view=view)
 
     @forms_group.command(name="settings")
-    # Permission check is dynamic (reads ticket_staff_role from Config at runtime).
-    # Enforced inside the command body, not via decorator, since the role ID is guild-specific.
     async def forms_settings(self, ctx: commands.Context) -> None:
         """Open the settings panel."""
-        pass
+        # Dynamic staff role permission check
+        staff_role_id = await self.config.guild(ctx.guild).ticket_staff_role()
+        is_admin = ctx.author.guild_permissions.administrator
+        has_staff_role = staff_role_id and any(r.id == staff_role_id for r in ctx.author.roles)
+        if not is_admin and not has_staff_role:
+            await ctx.send("You don't have permission to use this command.", delete_after=10)
+            return
+
+        from .views import SettingsPanelView
+        view = SettingsPanelView(self.config, self.bot)
+        embed = discord.Embed(
+            title="⚙️ Forms Settings",
+            description="Select a section to configure:",
+            color=discord.Color.blurple(),
+        )
+        await ctx.send(embed=embed, view=view)
 
     async def red_get_data_for_user(self, *, requester, user_id: int):
         return {}

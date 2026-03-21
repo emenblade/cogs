@@ -627,3 +627,222 @@ class ReviewView(discord.ui.View):
             self.guild_id, interaction.channel
         )
         await interaction.response.send_modal(modal)
+
+
+class EditTicketCategoriesModal(discord.ui.Modal, title="Edit Ticket Categories"):
+    categories = discord.ui.TextInput(
+        label="Categories (one per line)",
+        style=discord.TextStyle.paragraph,
+        placeholder="Bug Report\nPayment Issue\nGeneral Question",
+        max_length=500,
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        cats = [c.strip() for c in self.categories.value.splitlines() if c.strip()]
+        await interaction.client.cogs["Forms"].config.guild(interaction.guild).ticket_categories.set(cats)
+        await interaction.response.send_message(
+            f"✅ Categories updated: {', '.join(cats)}", ephemeral=True
+        )
+
+
+class MaxTicketsModal(discord.ui.Modal, title="Max Open Tickets"):
+    value = discord.ui.TextInput(label="Max tickets per user", placeholder="3", max_length=2)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            n = int(self.value.value)
+            assert 1 <= n <= 20
+        except (ValueError, AssertionError):
+            await interaction.response.send_message(
+                "Please enter a number between 1 and 20.", ephemeral=True
+            )
+            return
+        await interaction.client.cogs["Forms"].config.guild(interaction.guild).ticket_max_open.set(n)
+        await interaction.response.send_message(f"✅ Max open tickets set to {n}.", ephemeral=True)
+
+
+class TicketSettingsView(discord.ui.View):
+    def __init__(self, config: Config, bot):
+        super().__init__(timeout=180)
+        self.config = config
+        self.bot = bot
+
+    @discord.ui.button(label="Change Ticket Channel", style=discord.ButtonStyle.blurple)
+    async def change_channel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        view = WizardStep1View(self.config, interaction.guild.id, self.bot)
+        await interaction.response.send_message(
+            "Select the new ticket channel:", view=view, ephemeral=True
+        )
+
+    @discord.ui.button(label="Edit Categories", style=discord.ButtonStyle.grey)
+    async def edit_categories(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(EditTicketCategoriesModal())
+
+    @discord.ui.button(label="Set Max Tickets", style=discord.ButtonStyle.grey)
+    async def set_max_tickets(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(MaxTicketsModal())
+
+    @discord.ui.button(label="Re-post Ticket Panel", style=discord.ButtonStyle.green)
+    async def repost_panel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        channel_id = await self.config.guild(interaction.guild).ticket_channel()
+        channel = interaction.guild.get_channel(channel_id) if channel_id else None
+        if not channel:
+            await interaction.response.send_message("Ticket channel not configured.", ephemeral=True)
+            return
+        manager = interaction.client.cogs["Forms"].tickets
+        await manager.post_panel(channel)
+        await interaction.response.send_message("✅ Ticket panel re-posted.", ephemeral=True)
+
+
+class _SingleSelectView(discord.ui.View):
+    def __init__(self, options, placeholder="Select…"):
+        super().__init__(timeout=60)
+        self.selected = None
+        select = discord.ui.Select(options=options, placeholder=placeholder)
+        select.callback = self._callback
+        self.add_item(select)
+
+    async def _callback(self, interaction: discord.Interaction):
+        self.selected = interaction.data["values"][0]
+        await interaction.response.defer()
+        self.stop()
+
+
+class ConfirmView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=60)
+        self.confirmed = False
+
+    @discord.ui.button(label="Yes, delete", style=discord.ButtonStyle.red)
+    async def yes(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.confirmed = True
+        await interaction.response.defer()
+        self.stop()
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.grey)
+    async def no(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
+        self.stop()
+
+
+class ApplicationSettingsView(discord.ui.View):
+    def __init__(self, config: Config, bot):
+        super().__init__(timeout=180)
+        self.config = config
+        self.bot = bot
+
+    @discord.ui.button(label="➕ Create Application", style=discord.ButtonStyle.green)
+    async def create_app(self, interaction: discord.Interaction, button: discord.ui.Button):
+        modal = CreateApplicationModal()
+        await interaction.response.send_modal(modal)
+        await modal.wait()
+        from redbot.core.data_manager import cog_data_path
+        from .applications import ApplicationManager
+        manager = ApplicationManager(self.bot, self.config, cog_data_path(self.bot.cogs["Forms"]))
+        try:
+            await interaction.user.send("Starting application builder…")
+        except discord.Forbidden:
+            await interaction.followup.send(
+                "Please enable DMs to use the application builder.", ephemeral=True
+            )
+            return
+        await manager.create_application(
+            interaction.user, modal.result_name, modal.result_description
+        )
+
+    @discord.ui.button(label="✏️ Edit Application", style=discord.ButtonStyle.blurple)
+    async def edit_app(self, interaction: discord.Interaction, button: discord.ui.Button):
+        from redbot.core.data_manager import cog_data_path
+        from .applications import ApplicationManager
+        manager = ApplicationManager(self.bot, self.config, cog_data_path(self.bot.cogs["Forms"]))
+        apps = await manager.load_applications()
+        if not apps:
+            await interaction.response.send_message("No applications saved yet.", ephemeral=True)
+            return
+        options = [discord.SelectOption(label=a["name"], value=slug) for slug, a in apps.items()]
+        view = _SingleSelectView(options, placeholder="Select application to edit…")
+        await interaction.response.send_message("Which application?", view=view, ephemeral=True)
+        await view.wait()
+        if view.selected:
+            await manager.edit_application(interaction.user, view.selected)
+
+    @discord.ui.button(label="🗑️ Delete Application", style=discord.ButtonStyle.red)
+    async def delete_app(self, interaction: discord.Interaction, button: discord.ui.Button):
+        from redbot.core.data_manager import cog_data_path
+        from .applications import ApplicationManager
+        manager = ApplicationManager(self.bot, self.config, cog_data_path(self.bot.cogs["Forms"]))
+        apps = await manager.load_applications()
+        if not apps:
+            await interaction.response.send_message("No applications to delete.", ephemeral=True)
+            return
+        options = [discord.SelectOption(label=a["name"], value=slug) for slug, a in apps.items()]
+        view = _SingleSelectView(options, placeholder="Select application to delete…")
+        await interaction.response.send_message("Which application?", view=view, ephemeral=True)
+        await view.wait()
+        if view.selected:
+            confirm = ConfirmView()
+            await interaction.followup.send(
+                f"Delete **{apps[view.selected]['name']}**? This cannot be undone.",
+                view=confirm, ephemeral=True
+            )
+            await confirm.wait()
+            if confirm.confirmed:
+                await manager.delete_application(view.selected)
+                assignments = await self.config.guild(interaction.guild).application_assignments()
+                assignments.pop(view.selected, None)
+                await self.config.guild(interaction.guild).application_assignments.set(assignments)
+                await interaction.followup.send("✅ Application deleted.", ephemeral=True)
+
+    @discord.ui.button(label="📌 Assign to Channel", style=discord.ButtonStyle.grey)
+    async def assign_app(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message(
+            "Use the select menus to assign an application to a channel.", ephemeral=True
+        )
+
+
+class SettingsPanelView(discord.ui.View):
+    def __init__(self, config: Config, bot):
+        super().__init__(timeout=180)
+        self.config = config
+        self.bot = bot
+
+    @discord.ui.button(label="🎫 Ticket Settings", style=discord.ButtonStyle.blurple)
+    async def ticket_settings(self, interaction: discord.Interaction, button: discord.ui.Button):
+        view = TicketSettingsView(self.config, self.bot)
+        embed = discord.Embed(title="🎫 Ticket Settings", color=discord.Color.blurple())
+        guild_conf = self.config.guild(interaction.guild)
+        channel_id = await guild_conf.ticket_channel()
+        embed.add_field(
+            name="Ticket Channel",
+            value=f"<#{channel_id}>" if channel_id else "Not set"
+        )
+        staff_role_id = await guild_conf.ticket_staff_role()
+        embed.add_field(
+            name="Staff Role",
+            value=f"<@&{staff_role_id}>" if staff_role_id else "Not set"
+        )
+        categories = await guild_conf.ticket_categories()
+        embed.add_field(
+            name="Categories",
+            value=", ".join(categories) or "None",
+            inline=False
+        )
+        await interaction.response.edit_message(embed=embed, view=view)
+
+    @discord.ui.button(label="📋 Application Settings", style=discord.ButtonStyle.green)
+    async def application_settings(self, interaction: discord.Interaction, button: discord.ui.Button):
+        view = ApplicationSettingsView(self.config, self.bot)
+        embed = discord.Embed(title="📋 Application Settings", color=discord.Color.green())
+        from redbot.core.data_manager import cog_data_path
+        from .applications import ApplicationManager
+        manager = ApplicationManager(self.bot, self.config, cog_data_path(self.bot.cogs["Forms"]))
+        apps = await manager.load_applications()
+        if apps:
+            embed.add_field(
+                name="Saved Applications",
+                value="\n".join(f"• {a['name']} (`{slug}`)" for slug, a in apps.items()),
+                inline=False,
+            )
+        else:
+            embed.add_field(name="Saved Applications", value="None yet")
+        await interaction.response.edit_message(embed=embed, view=view)

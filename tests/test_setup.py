@@ -26,3 +26,31 @@ async def test_forms_setup_sends_embed_with_view(mock_bot):
         call_kwargs = ctx.send.call_args.kwargs
         assert "embed" in call_kwargs
         assert "view" in call_kwargs
+
+
+@pytest.mark.asyncio
+async def test_forms_settings_blocked_for_non_staff(mock_bot):
+    from forms.forms import Forms
+    with patch("forms.forms.Config") as MockConfig:
+        mock_conf = MagicMock()
+        mock_conf.register_guild = MagicMock()
+        mock_conf.register_member = MagicMock()
+        mock_conf.register_user = MagicMock()
+        guild_conf = MagicMock()
+        guild_conf.ticket_staff_role = AsyncMock(return_value=999)
+        mock_conf.guild = MagicMock(return_value=guild_conf)
+        MockConfig.get_conf.return_value = mock_conf
+
+        cog = Forms(mock_bot)
+        await cog.initialize()
+
+        ctx = AsyncMock()
+        ctx.guild = MagicMock()
+        ctx.author = MagicMock()
+        ctx.author.guild_permissions = MagicMock(administrator=False)
+        ctx.author.roles = []  # no staff role
+        ctx.send = AsyncMock()
+
+        await cog.forms_settings(ctx)
+        ctx.send.assert_called_once()
+        assert "permission" in ctx.send.call_args.args[0].lower()
