@@ -17,7 +17,40 @@ class Forms(commands.Cog):
         self.applications: ApplicationManager | None = None  # set in initialize()
 
     async def initialize(self) -> None:
-        """Called after cog is added to bot. Registers config and persistent views."""
+        """Register config defaults and initialize sub-managers."""
+        self.config.register_guild(
+            ticket_channel=None,
+            ticket_category=None,
+            ticket_user_role=None,
+            ticket_staff_role=None,
+            ticket_forum=None,
+            ticket_categories=[],
+            ticket_counter=0,
+            ticket_panel_message=None,
+            ticket_max_open=3,
+            ticket_tag_id=None,
+            application_tag_id=None,
+            application_assignments={},
+        )
+        self.config.register_member(
+            open_tickets=[],  # list of {"channel_id": int, "message_id": int, "counter": int}
+        )
+        self.config.register_user(
+            active_application=None,
+            # {"slug": str, "guild_id": int, "question_index": int, "answers": []}
+            application_cooldowns={},
+            # {"slug": unix_timestamp_expiry}
+        )
+        from pathlib import Path
+        from redbot.core.data_manager import cog_data_path
+        self.applications = ApplicationManager(
+            self.bot, self.config, cog_data_path(self)
+        )
+        self.applications.initialize()
+        await self._register_persistent_views()
+
+    async def _register_persistent_views(self) -> None:
+        """Re-register persistent views after bot restart. Implemented in Task 14."""
         pass
 
     @commands.group(name="forms")
