@@ -557,11 +557,12 @@ class DenyReasonModal(discord.ui.Modal, title="Denial Reason"):
             assignments[self.slug]["active_reviews"].pop(str(self.user_id), None)
             await self.config.guild(guild).application_assignments.set(assignments)
 
-        # Close forum thread
-        await self.thread.edit(archived=True, locked=True)
+        # Respond before archiving — archiving the thread first makes the
+        # interaction endpoint reject any further responses (error 50083).
         await interaction.response.send_message(
             "❌ Application denied. User has been notified.", ephemeral=True
         )
+        await self.thread.edit(archived=True, locked=True)
 
 
 class ReviewView(discord.ui.View):
@@ -612,10 +613,10 @@ class ReviewView(discord.ui.View):
         # Clean up
         assignments[self.slug]["active_reviews"].pop(str(self.user_id), None)
         await self.config.guild(guild).application_assignments.set(assignments)
-        await interaction.channel.edit(archived=True, locked=True)
         await interaction.response.send_message(
             "✅ Application approved. User notified.", ephemeral=True
         )
+        await interaction.channel.edit(archived=True, locked=True)
 
     @discord.ui.button(
         label="❌ Deny", style=discord.ButtonStyle.red, custom_id="forms:deny:_"
