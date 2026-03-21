@@ -422,3 +422,26 @@ class CloseTicketView(discord.ui.View):
         manager = TicketManager(interaction.client, self.config)
         await interaction.response.defer()
         await manager.close_ticket(interaction.channel, interaction.guild)
+
+
+class CreateApplicationModal(discord.ui.Modal, title="Create Application"):
+    app_name = discord.ui.TextInput(
+        label="Application Name",
+        placeholder="e.g. Mod Application",
+        max_length=80,
+    )
+    description = discord.ui.TextInput(
+        label="User-Facing Description",
+        style=discord.TextStyle.paragraph,
+        placeholder="What is this application for? Users will see this.",
+        max_length=500,
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        self.result_name = self.app_name.value.strip()
+        self.result_description = self.description.value.strip()
+        await interaction.response.send_message(
+            f"✅ Application **{self.result_name}** created. "
+            "Check your DMs — I'll walk you through adding questions.",
+            ephemeral=True,
+        )
