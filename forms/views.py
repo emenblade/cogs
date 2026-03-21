@@ -445,3 +445,68 @@ class CreateApplicationModal(discord.ui.Modal, title="Create Application"):
             "Check your DMs — I'll walk you through adding questions.",
             ephemeral=True,
         )
+
+
+class ApplyView(discord.ui.View):
+    """Persistent view with the Apply button posted in application channels."""
+
+    def __init__(self, config: Config, bot, slug: str):
+        super().__init__(timeout=None)
+        self.config = config
+        self.bot = bot
+        self.slug = slug
+        # Make custom_id unique per application slug
+        if self.children:
+            self.children[0].custom_id = f"forms:apply:{slug}"
+
+    @discord.ui.button(
+        label="📋 Apply",
+        style=discord.ButtonStyle.green,
+        custom_id="forms:apply:_placeholder",
+    )
+    async def apply(self, interaction: discord.Interaction, button: discord.ui.Button):
+        from .applications import ApplicationManager
+        from redbot.core.data_manager import cog_data_path
+        import time
+
+        manager = ApplicationManager(
+            interaction.client,
+            self.config,
+            cog_data_path(interaction.client.cogs["Forms"]),
+        )
+
+        # Check: already in progress?
+        active = await self.config.user(interaction.user).active_application()
+        if active is not None:
+            await interaction.response.send_message(
+                "You already have an application in progress. Please complete it first.",
+                ephemeral=True,
+            )
+            return
+
+        # Check: on cooldown?
+        cooldowns = await self.config.user(interaction.user).application_cooldowns()
+        expiry = cooldowns.get(self.slug)
+        if expiry and time.time() < expiry:
+            remaining = int(expiry - time.time())
+            days, rem = divmod(remaining, 86400)
+            hours = rem // 3600
+            await interaction.response.send_message(
+                f"You can re-apply in {days}d {hours}h.", ephemeral=True
+            )
+            return
+
+        # Check: DMs open
+        try:
+            dm = await interaction.user.create_dm()
+            await dm.send("Starting your application…")
+        except discord.Forbidden:
+            await interaction.response.send_message(
+                "Please enable DMs from server members to apply.", ephemeral=True
+            )
+            return
+
+        await interaction.response.send_message(
+            "✅ Check your DMs! I've sent you the first question.", ephemeral=True
+        )
+        await manager.start_application(interaction.user, interaction.guild, self.slug, dm)

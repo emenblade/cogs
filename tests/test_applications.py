@@ -51,3 +51,41 @@ async def test_load_applications_returns_all_json_files():
         assert "mod-application" in apps
         assert "builder" in apps
         assert apps["mod-application"]["name"] == "Mod Application"
+
+
+@pytest.mark.asyncio
+async def test_assign_application_saves_to_config():
+    """assign_application must save channel_id, approval_role_id, and cooldown_days to config."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        mock_conf = MagicMock()
+        guild_conf = MagicMock()
+        existing_assignments = {}
+        guild_conf.application_assignments = AsyncMock(return_value=existing_assignments)
+        guild_conf.application_assignments.set = AsyncMock()
+        mock_conf.guild = MagicMock(return_value=guild_conf)
+
+        from forms.applications import ApplicationManager
+        manager = ApplicationManager(MagicMock(), mock_conf, Path(tmpdir))
+
+        mock_channel = MagicMock()
+        mock_channel.id = 123
+        mock_channel.send = AsyncMock(return_value=MagicMock(id=456))
+        mock_guild = MagicMock()
+        mock_guild.id = 111
+
+        await manager.assign_application(
+            guild=mock_guild,
+            slug="mod-application",
+            name="Mod Application",
+            description="Join the mod team",
+            channel=mock_channel,
+            approval_role_id=789,
+            cooldown_days=7,
+        )
+
+        guild_conf.application_assignments.set.assert_called_once()
+        saved = guild_conf.application_assignments.set.call_args.args[0]
+        assert "mod-application" in saved
+        assert saved["mod-application"]["channel_id"] == 123
+        assert saved["mod-application"]["approval_role_id"] == 789
+        assert saved["mod-application"]["cooldown_days"] == 7

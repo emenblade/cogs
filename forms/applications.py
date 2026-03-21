@@ -103,3 +103,37 @@ class ApplicationManager:
             )
 
         return questions
+
+    async def assign_application(
+        self,
+        guild: discord.Guild,
+        slug: str,
+        name: str,
+        description: str,
+        channel: discord.TextChannel,
+        approval_role_id: int,
+        cooldown_days: int,
+    ) -> discord.Message:
+        """Post the application embed in a channel and save the assignment to config."""
+        from .views import ApplyView
+
+        embed = discord.Embed(
+            title=f"📋 {name}",
+            description=description,
+            color=discord.Color.green(),
+        )
+        embed.set_footer(text="Click Apply to begin. Staff will review your answers.")
+        view = ApplyView(self.config, self.bot, slug)
+        msg = await channel.send(embed=embed, view=view)
+
+        guild_conf = self.config.guild(guild)
+        assignments = await guild_conf.application_assignments()
+        assignments[slug] = {
+            "channel_id": channel.id,
+            "panel_message_id": msg.id,
+            "approval_role_id": approval_role_id,
+            "cooldown_days": cooldown_days,
+            "active_reviews": {},
+        }
+        await guild_conf.application_assignments.set(assignments)
+        return msg
