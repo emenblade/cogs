@@ -185,7 +185,7 @@ class TicketCategoriesModal(discord.ui.Modal, title="Ticket Categories"):
             ]
             if v.strip()
         ]
-        max_open = int(self.max_open.value) if self.max_open.value.strip().isdigit() else 3
+        max_open = max(1, int(self.max_open.value)) if self.max_open.value.strip().isdigit() else 3
         await self.config.guild_from_id(self.guild_id).ticket_categories.set(categories)
         await self.config.guild_from_id(self.guild_id).ticket_max_open.set(max_open)
         await finish_wizard(interaction, self.config, self.guild_id, self.bot)
@@ -196,6 +196,7 @@ class WizardStep7View(_WizardStepView):
 
     @discord.ui.button(label="Enter Categories", style=discord.ButtonStyle.blurple)
     async def enter_categories(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.stop()
         modal = TicketCategoriesModal(self.config, self.guild_id, self.bot)
         await interaction.response.send_modal(modal)
 
@@ -296,15 +297,16 @@ async def _send_wizard_step7(interaction: discord.Interaction, config: Config, g
 
 async def finish_wizard(interaction: discord.Interaction, config: Config, guild_id: int, bot) -> None:
     """Post the ticket panel in the configured channel and mark setup complete."""
-    from .tickets import TicketManager
+    await interaction.response.defer(ephemeral=True)
+
+    from .tickets import TicketPanelView
     ticket_channel_id = await config.guild_from_id(guild_id).ticket_channel()
     guild = bot.get_guild(guild_id)
     channel = guild.get_channel(ticket_channel_id) if guild else None
     if channel is None:
-        await interaction.response.edit_message(
-            content="⚠️ Could not find the configured ticket channel. Please re-run setup.",
-            view=None,
-            embed=None,
+        await interaction.followup.send(
+            "⚠️ Could not find the configured ticket channel. Please re-run setup.",
+            ephemeral=True,
         )
         return
     embed = discord.Embed(
@@ -312,12 +314,7 @@ async def finish_wizard(interaction: discord.Interaction, config: Config, guild_
         description="Click the button below to open a support ticket.",
         color=discord.Color.blurple(),
     )
-    from .tickets import TicketPanelView
     panel_view = TicketPanelView(config, guild_id, bot)
     msg = await channel.send(embed=embed, view=panel_view)
     await config.guild_from_id(guild_id).ticket_panel_message.set(msg.id)
-    await interaction.response.edit_message(
-        content="✅ Setup complete! Ticket panel posted.",
-        view=None,
-        embed=None,
-    )
+    await interaction.followup.send("✅ Setup complete! Ticket panel posted.", ephemeral=True)
