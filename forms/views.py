@@ -207,18 +207,38 @@ class WizardStep7View(_WizardStepView):
         await interaction.response.edit_message(content="❌ Setup cancelled.", view=None, embed=None)
 
 
-async def _ensure_ticket_forum_tags(forum: discord.ForumChannel, config: Config, guild_id: int) -> None:
-    """Create TICKET tag in the ticket forum if it doesn't exist; store ID in config."""
+async def _ensure_ticket_forum_tags(forum: discord.ForumChannel, config: Config, guild_id: int) -> bool:
+    """Create TICKET tag in the ticket forum if it doesn't exist; store ID in config.
+
+    Returns True on success, False if the bot lacks Manage Channels permission.
+    """
     existing = {t.name: t for t in forum.available_tags}
-    ticket_tag = existing.get("TICKET") or await forum.create_tag(name="TICKET")
-    await config.guild_from_id(guild_id).ticket_tag_id.set(ticket_tag.id)
+    if "TICKET" in existing:
+        await config.guild_from_id(guild_id).ticket_tag_id.set(existing["TICKET"].id)
+        return True
+    try:
+        tag = await forum.create_tag(name="TICKET")
+        await config.guild_from_id(guild_id).ticket_tag_id.set(tag.id)
+        return True
+    except discord.Forbidden:
+        return False
 
 
-async def _ensure_application_forum_tags(forum: discord.ForumChannel, config: Config, guild_id: int) -> None:
-    """Create APPLICATION tag in the application forum if it doesn't exist; store ID in config."""
+async def _ensure_application_forum_tags(forum: discord.ForumChannel, config: Config, guild_id: int) -> bool:
+    """Create APPLICATION tag in the application forum if it doesn't exist; store ID in config.
+
+    Returns True on success, False if the bot lacks Manage Channels permission.
+    """
     existing = {t.name: t for t in forum.available_tags}
-    app_tag = existing.get("APPLICATION") or await forum.create_tag(name="APPLICATION")
-    await config.guild_from_id(guild_id).application_tag_id.set(app_tag.id)
+    if "APPLICATION" in existing:
+        await config.guild_from_id(guild_id).application_tag_id.set(existing["APPLICATION"].id)
+        return True
+    try:
+        tag = await forum.create_tag(name="APPLICATION")
+        await config.guild_from_id(guild_id).application_tag_id.set(tag.id)
+        return True
+    except discord.Forbidden:
+        return False
 
 
 async def _send_wizard_step2(interaction: discord.Interaction, config: Config, guild_id: int, bot) -> None:
@@ -264,11 +284,20 @@ async def _send_wizard_step5(interaction: discord.Interaction, config: Config, g
 async def _send_wizard_step6(
     interaction: discord.Interaction, config: Config, guild_id: int, bot, forum: discord.ForumChannel
 ) -> None:
-    await _ensure_ticket_forum_tags(forum, config, guild_id)
+    tag_ok = await _ensure_ticket_forum_tags(forum, config, guild_id)
+    if tag_ok:
+        description = "✅ **TICKET** tag created/confirmed in the forum.\n\nClick **Next** to set up ticket categories."
+    else:
+        description = (
+            "⚠️ Could not create the **TICKET** tag automatically — the bot needs "
+            "**Manage Channels** permission on the forum.\n\n"
+            "You can create the tag manually and the bot will find it next time, "
+            "or grant the permission and re-run setup.\n\nClick **Next** to continue."
+        )
     embed = discord.Embed(
         title="Forms Setup — Step 6 of 7",
-        description="✅ Forum tags created: **TICKET** and **APPLICATION**.\n\nClick **Next** to set up ticket categories.",
-        color=discord.Color.green(),
+        description=description,
+        color=discord.Color.green() if tag_ok else discord.Color.orange(),
     )
     view = _Step6NextView(config, guild_id, bot)
     await interaction.response.edit_message(embed=embed, view=view)
@@ -1177,11 +1206,17 @@ class ApplicationSettingsView(discord.ui.View):
             await interaction.followup.send("That doesn't appear to be a forum channel.", ephemeral=True)
             return
         await self.config.guild(interaction.guild).application_forum.set(forum.id)
-        await _ensure_application_forum_tags(forum, self.config, interaction.guild.id)
-        await interaction.followup.send(
-            f"✅ Application forum set to {forum.mention}. APPLICATION tag created/confirmed.",
-            ephemeral=True,
-        )
+        tag_ok = await _ensure_application_forum_tags(forum, self.config, interaction.guild.id)
+        if tag_ok:
+            msg = f"✅ Application forum set to {forum.mention}. APPLICATION tag created/confirmed."
+        else:
+            msg = (
+                f"✅ Application forum set to {forum.mention}.\n"
+                "⚠️ Could not create the **APPLICATION** tag automatically — the bot needs "
+                "**Manage Channels** permission on that forum. Create the tag manually or grant "
+                "the permission and re-save."
+            )
+        await interaction.followup.send(msg, ephemeral=True)
 
     @discord.ui.button(label="🖼️ Post Application Panel", style=discord.ButtonStyle.blurple)
     async def post_app_panel(self, interaction: discord.Interaction, button: discord.ui.Button):
