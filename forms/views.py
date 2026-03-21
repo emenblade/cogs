@@ -510,6 +510,18 @@ class ApplyView(discord.ui.View):
             cog_data_path(interaction.client.cogs["Forms"]),
         )
 
+        # Check: allowed roles
+        assignments = await self.config.guild(interaction.guild).application_assignments()
+        app_conf = assignments.get(self.slug, {})
+        allowed_role_ids = app_conf.get("allowed_role_ids", [])
+        if allowed_role_ids:
+            member_role_ids = {r.id for r in interaction.user.roles}
+            if not member_role_ids.intersection(allowed_role_ids):
+                await interaction.response.send_message(
+                    "You don't have the required role to apply for this.", ephemeral=True
+                )
+                return
+
         # Check: already in progress?
         active = await self.config.user(interaction.user).active_application()
         if active is not None:
@@ -666,6 +678,24 @@ class DenyReasonModal(discord.ui.Modal, title="Denial Reason"):
         except discord.HTTPException:
             pass
 
+        # Update thread tags: remove OPEN, add CLOSED
+        forum = self.thread.parent
+        if forum and isinstance(forum, discord.ForumChannel):
+            forum_tags = {t.name: t for t in forum.available_tags}
+            closed_tag = forum_tags.get("CLOSED")
+            if not closed_tag:
+                try:
+                    closed_tag = await forum.create_tag(name="CLOSED")
+                except discord.Forbidden:
+                    closed_tag = None
+            current_tags = [t for t in self.thread.applied_tags if t.name != "OPEN"]
+            if closed_tag:
+                current_tags.append(closed_tag)
+            try:
+                await self.thread.edit(applied_tags=current_tags)
+            except discord.HTTPException:
+                pass
+
         await self.thread.send(
             f"❌ **Application denied** by {interaction.user.mention}.\n**Reason:** {self.reason.value}"
         )
@@ -719,6 +749,14 @@ class ReviewView(discord.ui.View):
             if role:
                 await member.add_roles(role, reason=f"Approved via Forms cog: {self.slug}")
 
+        if member:
+            removal_role_ids = app_conf.get("removal_role_ids", [])
+            if removal_role_ids:
+                roles_to_remove = [guild.get_role(r_id) for r_id in removal_role_ids]
+                roles_to_remove = [r for r in roles_to_remove if r]
+                if roles_to_remove:
+                    await member.remove_roles(*roles_to_remove, reason=f"Approved via Forms cog: {self.slug}")
+
         try:
             user = member or await self.bot.fetch_user(self.user_id)
             await user.send(
@@ -755,6 +793,24 @@ class ReviewView(discord.ui.View):
         )
         assignments[self.slug].setdefault("reset_cooldown_messages", {})[str(self.user_id)] = reset_msg.id
         await self.config.guild(guild).application_assignments.set(assignments)
+
+        # Update thread tags: remove OPEN, add CLOSED
+        forum = interaction.channel.parent
+        if forum and isinstance(forum, discord.ForumChannel):
+            forum_tags = {t.name: t for t in forum.available_tags}
+            closed_tag = forum_tags.get("CLOSED")
+            if not closed_tag:
+                try:
+                    closed_tag = await forum.create_tag(name="CLOSED")
+                except discord.Forbidden:
+                    closed_tag = None
+            current_tags = [t for t in interaction.channel.applied_tags if t.name != "OPEN"]
+            if closed_tag:
+                current_tags.append(closed_tag)
+            try:
+                await interaction.channel.edit(applied_tags=current_tags)
+            except discord.HTTPException:
+                pass
 
         await interaction.response.send_message(
             "✅ Application approved. User notified.", ephemeral=True
@@ -906,6 +962,30 @@ class _ChannelSelectStepView(discord.ui.View):
         self.stop()
 
 
+class _MultiRoleSelectStepView(discord.ui.View):
+    """Multi-select role step with a Skip button."""
+
+    def __init__(self, placeholder: str = "Select roles…"):
+        super().__init__(timeout=120)
+        self.selected_role_ids: list = []
+
+    @discord.ui.select(
+        cls=discord.ui.RoleSelect,
+        placeholder="Select roles…",
+        min_values=0,
+        max_values=10,
+    )
+    async def role_select(self, interaction: discord.Interaction, select: discord.ui.RoleSelect):
+        self.selected_role_ids = [r.id for r in select.values]
+        await interaction.response.defer()
+        self.stop()
+
+    @discord.ui.button(label="Skip", style=discord.ButtonStyle.grey)
+    async def skip(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
+        self.stop()
+
+
 class _RoleSelectStepView(discord.ui.View):
     """Single role select step used during application assignment."""
 
@@ -1045,7 +1125,7 @@ class ApplicationSettingsView(discord.ui.View):
         options = [discord.SelectOption(label=a["name"], value=slug) for slug, a in apps.items()]
         view = _SingleSelectView(options, placeholder="Select application to assign…")
         await interaction.response.send_message(
-            "**Step 1 of 3:** Which application do you want to assign to a channel?",
+            "**Step 1 of 5:** Which application do you want to assign to a channel?",
             view=view,
             ephemeral=True,
         )
@@ -1058,7 +1138,7 @@ class ApplicationSettingsView(discord.ui.View):
         # Step 2: pick channel
         channel_view = _ChannelSelectStepView()
         await interaction.followup.send(
-            f"**Step 2 of 3:** Select the channel where the **{app['name']}** Apply button will be posted.",
+            f"**Step 2 of 5:** Select the channel where the **{app['name']}** Apply button will be posted.",
             view=channel_view,
             ephemeral=True,
         )
@@ -1066,14 +1146,32 @@ class ApplicationSettingsView(discord.ui.View):
         if not channel_view.selected_channel:
             return
 
-        # Step 3: pick approval role
+        # Step 3: pick which roles can click Apply (optional)
+        allowed_view = _MultiRoleSelectStepView()
+        await interaction.followup.send(
+            "**Step 3 of 5:** Select roles that are **allowed to apply** (skip = anyone can apply).",
+            view=allowed_view,
+            ephemeral=True,
+        )
+        await allowed_view.wait()
+
+        # Step 4: pick approval role (role to grant)
         role_view = _RoleSelectStepView()
         await interaction.followup.send(
-            "**Step 3 of 3:** Select the role to grant on approval (or skip to set no auto-role).",
+            "**Step 4 of 5:** Select the role to **grant** on approval (or skip for none).",
             view=role_view,
             ephemeral=True,
         )
         await role_view.wait()
+
+        # Step 5: pick roles to remove on approval
+        removal_view = _MultiRoleSelectStepView()
+        await interaction.followup.send(
+            "**Step 5 of 5:** Select roles to **remove** on approval (skip for none).",
+            view=removal_view,
+            ephemeral=True,
+        )
+        await removal_view.wait()
 
         # Cooldown modal
         cooldown_modal = _CooldownModal()
@@ -1094,6 +1192,8 @@ class ApplicationSettingsView(discord.ui.View):
             description=app["description"],
             channel=channel_view.selected_channel,
             approval_role_id=approval_role_id,
+            removal_role_ids=removal_view.selected_role_ids,
+            allowed_role_ids=allowed_view.selected_role_ids,
             cooldown_days=cooldown_days,
         )
         await interaction.followup.send(

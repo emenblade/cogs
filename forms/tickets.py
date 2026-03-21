@@ -84,6 +84,7 @@ class TicketManager:
             "channel_id": channel.id,
             "message_id": msg.id,
             "counter": counter,
+            "category": category_name,
         }
         async with self.config.member(interaction.user).open_tickets() as tickets:
             tickets.append(ticket_entry)
@@ -106,15 +107,17 @@ class TicketManager:
         transcript_file = transcript_dir / f"{channel.name}.txt"
         transcript_file.write_text(transcript_text, encoding="utf-8")
 
-        # Find the ticket opener from config
+        # Find the ticket opener and category from config
         opener = None
+        category_name = None
         all_member_data = await self.config.all_members(guild)
         for member_id_str, data in all_member_data.items():
             for ticket in data.get("open_tickets", []):
                 if ticket.get("channel_id") == channel.id:
                     opener = guild.get_member(int(member_id_str))
+                    category_name = ticket.get("category")
                     break
-            if opener:
+            if category_name is not None:
                 break
 
         # DM transcript to opener
@@ -130,10 +133,21 @@ class TicketManager:
 
         # Post to staff forum
         forum_id = await guild_conf.ticket_forum()
-        ticket_tag_id = await guild_conf.ticket_tag_id()
         forum = guild.get_channel(forum_id) if forum_id else None
         if forum and isinstance(forum, discord.ForumChannel):
-            tags = [t for t in forum.available_tags if t.id == ticket_tag_id]
+            # Use category name as tag; fall back to TICKET tag if no category
+            if category_name:
+                existing = {t.name: t for t in forum.available_tags}
+                cat_tag = existing.get(category_name)
+                if not cat_tag:
+                    try:
+                        cat_tag = await forum.create_tag(name=category_name)
+                    except discord.Forbidden:
+                        cat_tag = None
+                tags = [cat_tag] if cat_tag else []
+            else:
+                ticket_tag_id = await guild_conf.ticket_tag_id()
+                tags = [t for t in forum.available_tags if t.id == ticket_tag_id]
             body = transcript_text[:4000] if transcript_text else "(empty)"
             thread, _first_msg = await forum.create_thread(
                 name=channel.name,
