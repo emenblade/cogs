@@ -50,8 +50,57 @@ class Forms(commands.Cog):
         await self._register_persistent_views()
 
     async def _register_persistent_views(self) -> None:
-        """Re-register persistent views after bot restart. Implemented in Task 14."""
-        pass
+        """Re-register all persistent views after bot restart."""
+        from .views import TicketPanelView, CloseTicketView, ApplyView, ReviewView
+
+        all_guild_data = await self.config.all_guilds()
+
+        for guild_id_str, guild_data in all_guild_data.items():
+            guild_id = int(guild_id_str)
+
+            # Ticket panel
+            panel_msg_id = guild_data.get("ticket_panel_message")
+            if panel_msg_id:
+                self.bot.add_view(
+                    TicketPanelView(self.config, self.bot),
+                    message_id=panel_msg_id,
+                )
+
+            # Application panels
+            assignments = guild_data.get("application_assignments", {})
+            for slug, assignment in assignments.items():
+                panel_msg_id = assignment.get("panel_message_id")
+                if panel_msg_id:
+                    self.bot.add_view(
+                        ApplyView(self.config, self.bot, slug),
+                        message_id=panel_msg_id,
+                    )
+                # Review views
+                for user_id_str, review in assignment.get("active_reviews", {}).items():
+                    review_msg_id = review.get("review_message_id")
+                    if review_msg_id:
+                        self.bot.add_view(
+                            ReviewView(self.config, self.bot, slug, int(user_id_str), guild_id),
+                            message_id=review_msg_id,
+                        )
+
+        # Close ticket views — iterate all members' open_tickets per guild
+        for guild_id_str, guild_data in all_guild_data.items():
+            guild_id = int(guild_id_str)
+            guild = self.bot.get_guild(guild_id)
+            if guild is None:
+                continue
+            staff_role_id = guild_data.get("ticket_staff_role")
+            all_member_data = await self.config.all_members(guild)
+            for member_id_str, member_data in all_member_data.items():
+                for ticket in member_data.get("open_tickets", []):
+                    close_msg_id = ticket.get("message_id")
+                    channel_id = ticket.get("channel_id")
+                    if close_msg_id and channel_id:
+                        self.bot.add_view(
+                            CloseTicketView(self.config, self.bot, channel_id, staff_role_id),
+                            message_id=close_msg_id,
+                        )
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:
@@ -112,8 +161,22 @@ class Forms(commands.Cog):
         )
         await ctx.send(embed=embed, view=view)
 
-    async def red_get_data_for_user(self, *, requester, user_id: int):
-        return {}
+    async def red_get_data_for_user(self, *, requester: str, user_id: int) -> dict:
+        """Return all stored data for a user (required by RedBot)."""
+        data = {}
+        user = self.bot.get_user(user_id) or discord.Object(id=user_id)
+        user_data = await self.config.user(user).all()
+        if any(v is not None and v != {} and v != [] for v in user_data.values()):
+            data["user_config"] = user_data
+        return data
 
-    async def red_delete_data_for_user(self, *, requester, user_id: int):
-        pass
+    async def red_delete_data_for_user(self, *, requester: str, user_id: int) -> None:
+        """Delete all stored data for a user (required by RedBot)."""
+        user = self.bot.get_user(user_id) or discord.Object(id=user_id)
+        await self.config.user(user).clear()
+
+        # Also clear member-scoped data across all guilds
+        for guild in self.bot.guilds:
+            member = guild.get_member(user_id)
+            if member:
+                await self.config.member(member).clear()
