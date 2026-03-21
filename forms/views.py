@@ -163,13 +163,14 @@ class WizardStep5View(_WizardStepView):
 
 
 class TicketCategoriesModal(discord.ui.Modal, title="Ticket Categories"):
-    """Modal for entering ticket category names (up to 5)."""
+    """Modal for entering ticket category names and max-open limit."""
 
-    cat1 = discord.ui.TextInput(label="Category 1", placeholder="e.g. General Support", required=True)
-    cat2 = discord.ui.TextInput(label="Category 2", placeholder="e.g. Bug Report", required=False)
-    cat3 = discord.ui.TextInput(label="Category 3", placeholder="e.g. Billing", required=False)
-    cat4 = discord.ui.TextInput(label="Category 4", placeholder="Optional", required=False)
-    cat5 = discord.ui.TextInput(label="Category 5", placeholder="Optional", required=False)
+    categories = discord.ui.TextInput(
+        label="Categories (one per line, up to 5)",
+        style=discord.TextStyle.paragraph,
+        placeholder="General Support\nBug Report\nBilling",
+        required=True,
+    )
     max_open = discord.ui.TextInput(
         label="Max open tickets per user",
         placeholder="3",
@@ -184,19 +185,9 @@ class TicketCategoriesModal(discord.ui.Modal, title="Ticket Categories"):
         self.bot = bot
 
     async def on_submit(self, interaction: discord.Interaction):
-        categories = [
-            v.strip()
-            for v in [
-                self.cat1.value,
-                self.cat2.value,
-                self.cat3.value,
-                self.cat4.value,
-                self.cat5.value,
-            ]
-            if v.strip()
-        ]
+        cats = [line.strip() for line in self.categories.value.splitlines() if line.strip()][:5]
         max_open = max(1, int(self.max_open.value)) if self.max_open.value.strip().isdigit() else 3
-        await self.config.guild_from_id(self.guild_id).ticket_categories.set(categories)
+        await self.config.guild_from_id(self.guild_id).ticket_categories.set(cats)
         await self.config.guild_from_id(self.guild_id).ticket_max_open.set(max_open)
         await finish_wizard(interaction, self.config, self.guild_id, self.bot)
 
