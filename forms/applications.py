@@ -104,6 +104,73 @@ class ApplicationManager:
 
         return questions
 
+    async def _run_edit_question_builder(
+        self, member: discord.Member, dm: discord.DMChannel, existing_questions: list[str]
+    ) -> list[str]:
+        """Walk through existing questions, letting staff keep or replace each."""
+        updated = []
+
+        def check(m):
+            return m.author.id == member.id and m.channel.id == dm.id
+
+        for i, q in enumerate(existing_questions):
+            await dm.send(
+                f"**Question {i+1} is currently:**\n> {q}\n\n"
+                "Reply with new text to replace it, or reply `keep` to leave it unchanged."
+            )
+            try:
+                reply = await self.bot.wait_for("message", check=check, timeout=300)
+            except asyncio.TimeoutError:
+                await dm.send("⏰ Timed out. Keeping remaining questions as-is.")
+                updated.extend(existing_questions[i:])
+                return updated
+
+            if reply.content.strip().lower() == "keep":
+                updated.append(q)
+            else:
+                updated.append(reply.content.strip())
+            await dm.send(f"✅ Question {i+1} updated.")
+
+        # Ask if they want to add more
+        await dm.send(
+            f"All {len(existing_questions)} questions reviewed. "
+            "Do you want to add more questions? Reply `yes` or `no`."
+        )
+        try:
+            reply = await self.bot.wait_for("message", check=check, timeout=120)
+            if reply.content.strip().lower() == "yes":
+                extra = await self._run_question_builder(member, dm)
+                updated.extend(extra)
+        except asyncio.TimeoutError:
+            pass
+
+        return updated
+
+    async def edit_application(
+        self, member: discord.Member, slug: str,
+        new_name: str | None = None, new_description: str | None = None
+    ) -> bool:
+        """Edit an existing application. Returns False if not found."""
+        apps = await self.load_applications()
+        if slug not in apps:
+            return False
+
+        app = apps[slug]
+        if new_name:
+            app["name"] = new_name
+        if new_description:
+            app["description"] = new_description
+
+        try:
+            dm = await member.create_dm()
+            updated_questions = await self._run_edit_question_builder(member, dm, app["questions"])
+            app["questions"] = updated_questions
+            await self._save_application(app)
+            await dm.send(f"✅ **{app['name']}** has been updated with {len(updated_questions)} question(s).")
+            return True
+        except discord.Forbidden:
+            return False
+
     async def assign_application(
         self,
         guild: discord.Guild,

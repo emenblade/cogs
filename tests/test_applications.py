@@ -212,3 +212,28 @@ async def test_post_review_forum_creates_thread_with_transcript():
         await manager._post_review_forum(mock_user, mock_guild, app, answers)
 
         mock_forum.create_thread.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_delete_application_removes_file():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        app_dir = Path(tmpdir) / "applications"
+        app_dir.mkdir()
+        (app_dir / "mod-application.json").write_text(
+            '{"slug":"mod-application","name":"Mod","description":"d","questions":[]}'
+        )
+
+        from forms.applications import ApplicationManager
+        manager = ApplicationManager(MagicMock(), MagicMock(), Path(tmpdir))
+        result = await manager.delete_application("mod-application")
+        assert result is True
+        assert not (app_dir / "mod-application.json").exists()
+
+
+@pytest.mark.asyncio
+async def test_delete_nonexistent_application_returns_false():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        from forms.applications import ApplicationManager
+        manager = ApplicationManager(MagicMock(), MagicMock(), Path(tmpdir))
+        result = await manager.delete_application("nonexistent")
+        assert result is False
