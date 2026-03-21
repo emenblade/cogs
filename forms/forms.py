@@ -3,6 +3,7 @@ from __future__ import annotations
 import discord
 from redbot.core import Config, commands
 from redbot.core.bot import Red
+from redbot.core.data_manager import cog_data_path
 from .tickets import TicketManager
 from .applications import ApplicationManager
 
@@ -41,8 +42,6 @@ class Forms(commands.Cog):
             application_cooldowns={},
             # {"slug": unix_timestamp_expiry}
         )
-        from pathlib import Path
-        from redbot.core.data_manager import cog_data_path
         self.applications = ApplicationManager(
             self.bot, self.config, cog_data_path(self)
         )

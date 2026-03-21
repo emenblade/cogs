@@ -1,7 +1,6 @@
 # tests/test_config.py
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
-import asyncio
 
 
 def test_config_registered_with_correct_identifier():
@@ -53,3 +52,7 @@ async def test_initialize_registers_guild_defaults():
         user_kwargs = mock_conf.register_user.call_args[1]
         assert "active_application" in user_kwargs
         assert "application_cooldowns" in user_kwargs
+
+        assert cog.applications is not None
+        mock_conf.register_member.assert_called_once()
+        mock_conf.register_user.assert_called_once()
