@@ -53,7 +53,7 @@ class Forms(commands.Cog):
 
     async def _register_persistent_views(self) -> None:
         """Re-register all persistent views after bot restart."""
-        from .views import TicketPanelView, CloseTicketView, ApplyView, ReviewView, ResetCooldownView
+        from .views import TicketPanelView, CloseTicketView, ApplyView, ReviewView, ResetCooldownView, ApplicationSettingsView
 
         all_guild_data = await self.config.all_guilds()
 
@@ -66,6 +66,14 @@ class Forms(commands.Cog):
                 self.bot.add_view(
                     TicketPanelView(self.config, self.bot),
                     message_id=panel_msg_id,
+                )
+
+            # Application management panel
+            app_panel_msg_id = guild_data.get("application_panel_message")
+            if app_panel_msg_id:
+                self.bot.add_view(
+                    ApplicationSettingsView(self.config, self.bot),
+                    message_id=app_panel_msg_id,
                 )
 
             # Application panels (per-channel Apply buttons)
@@ -189,7 +197,8 @@ class Forms(commands.Cog):
             ),
             color=discord.Color.green(),
         )
-        await ctx.send(embed=embed, view=view)
+        msg = await ctx.send(embed=embed, view=view)
+        await self.config.guild(ctx.guild).application_panel_message.set(msg.id)
 
     async def red_get_data_for_user(self, *, requester: str, user_id: int) -> dict:
         """Return all stored data for a user (required by RedBot)."""

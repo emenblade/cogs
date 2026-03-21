@@ -1045,11 +1045,22 @@ class _OpenModalView(discord.ui.View):
 
 class ApplicationSettingsView(discord.ui.View):
     def __init__(self, config: Config, bot):
-        super().__init__(timeout=180)
+        super().__init__(timeout=None)
         self.config = config
         self.bot = bot
 
-    @discord.ui.button(label="➕ Create Application", style=discord.ButtonStyle.green)
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        staff_role_id = await self.config.guild(interaction.guild).ticket_staff_role()
+        is_admin = interaction.user.guild_permissions.administrator
+        has_staff = staff_role_id and any(r.id == staff_role_id for r in interaction.user.roles)
+        if not is_admin and not has_staff:
+            await interaction.response.send_message(
+                "You don't have permission to use this.", ephemeral=True
+            )
+            return False
+        return True
+
+    @discord.ui.button(label="➕ Create Application", style=discord.ButtonStyle.green, custom_id="forms:appmgmt:create")
     async def create_app(self, interaction: discord.Interaction, button: discord.ui.Button):
         modal = CreateApplicationModal()
         await interaction.response.send_modal(modal)
@@ -1070,7 +1081,7 @@ class ApplicationSettingsView(discord.ui.View):
             interaction.user, modal.result_name, modal.result_description
         )
 
-    @discord.ui.button(label="✏️ Edit Application", style=discord.ButtonStyle.blurple)
+    @discord.ui.button(label="✏️ Edit Application", style=discord.ButtonStyle.blurple, custom_id="forms:appmgmt:edit")
     async def edit_app(self, interaction: discord.Interaction, button: discord.ui.Button):
         from redbot.core.data_manager import cog_data_path
         from .applications import ApplicationManager
@@ -1086,7 +1097,7 @@ class ApplicationSettingsView(discord.ui.View):
         if view.selected:
             await manager.edit_application(interaction.user, view.selected)
 
-    @discord.ui.button(label="🗑️ Delete Application", style=discord.ButtonStyle.red)
+    @discord.ui.button(label="🗑️ Delete Application", style=discord.ButtonStyle.red, custom_id="forms:appmgmt:delete")
     async def delete_app(self, interaction: discord.Interaction, button: discord.ui.Button):
         from redbot.core.data_manager import cog_data_path
         from .applications import ApplicationManager
@@ -1113,7 +1124,7 @@ class ApplicationSettingsView(discord.ui.View):
                 await self.config.guild(interaction.guild).application_assignments.set(assignments)
                 await interaction.followup.send("✅ Application deleted.", ephemeral=True)
 
-    @discord.ui.button(label="📌 Assign to Channel", style=discord.ButtonStyle.grey)
+    @discord.ui.button(label="📌 Assign to Channel", style=discord.ButtonStyle.grey, custom_id="forms:appmgmt:assign")
     async def assign_app(self, interaction: discord.Interaction, button: discord.ui.Button):
         from redbot.core.data_manager import cog_data_path
         from .applications import ApplicationManager
@@ -1201,7 +1212,7 @@ class ApplicationSettingsView(discord.ui.View):
             ephemeral=True,
         )
 
-    @discord.ui.button(label="📁 Set Application Forum", style=discord.ButtonStyle.grey)
+    @discord.ui.button(label="📁 Set Application Forum", style=discord.ButtonStyle.grey, custom_id="forms:appmgmt:forum")
     async def set_app_forum(self, interaction: discord.Interaction, button: discord.ui.Button):
         view = _ForumSelectStepView()
         await interaction.response.send_message(
