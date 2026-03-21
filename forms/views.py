@@ -145,7 +145,16 @@ class WizardStep5View(_WizardStepView):
             return
         await self.config.guild_from_id(self.guild_id).ticket_forum.set(self._selected.id)
         self.stop()
-        await _send_wizard_step6(interaction, self.config, self.guild_id, self.bot, self._selected)
+        # Resolve AppCommandChannel to a full ForumChannel object
+        forum = interaction.guild.get_channel(self._selected.id)
+        if not isinstance(forum, discord.ForumChannel):
+            await interaction.response.edit_message(
+                content="⚠️ Could not resolve the selected forum channel. Please try again.",
+                view=None,
+                embed=None,
+            )
+            return
+        await _send_wizard_step6(interaction, self.config, self.guild_id, self.bot, forum)
 
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.red)
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
