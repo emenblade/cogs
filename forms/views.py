@@ -166,7 +166,7 @@ class TicketCategoriesModal(discord.ui.Modal, title="Ticket Categories"):
     """Modal for entering ticket category names and max-open limit."""
 
     categories = discord.ui.TextInput(
-        label="Categories (one per line, up to 5)",
+        label="Categories (one per line, up to 20)",
         style=discord.TextStyle.paragraph,
         placeholder="General Support\nBug Report\nBilling",
         required=True,
@@ -185,7 +185,7 @@ class TicketCategoriesModal(discord.ui.Modal, title="Ticket Categories"):
         self.bot = bot
 
     async def on_submit(self, interaction: discord.Interaction):
-        cats = [line.strip() for line in self.categories.value.splitlines() if line.strip()][:5]
+        cats = [line.strip() for line in self.categories.value.splitlines() if line.strip()][:20]
         max_open = max(1, int(self.max_open.value)) if self.max_open.value.strip().isdigit() else 3
         await self.config.guild_from_id(self.guild_id).ticket_categories.set(cats)
         await self.config.guild_from_id(self.guild_id).ticket_max_open.set(max_open)
@@ -322,7 +322,7 @@ async def _send_wizard_step7(interaction: discord.Interaction, config: Config, g
     embed = discord.Embed(
         title="Forms Setup — Step 7 of 7",
         description=(
-            "Click **Enter Categories** to open a form where you can name up to 5 ticket categories "
+            "Click **Enter Categories** to open a form where you can name up to 20 ticket categories "
             "and set the max open tickets per user (default: 3)."
         ),
         color=discord.Color.blurple(),
@@ -775,14 +775,14 @@ class ReviewView(discord.ui.View):
 
 class EditTicketCategoriesModal(discord.ui.Modal, title="Edit Ticket Categories"):
     categories = discord.ui.TextInput(
-        label="Categories (one per line)",
+        label="Categories (one per line, up to 20)",
         style=discord.TextStyle.paragraph,
         placeholder="Bug Report\nPayment Issue\nGeneral Question",
-        max_length=500,
+        max_length=1000,
     )
 
     async def on_submit(self, interaction: discord.Interaction):
-        cats = [c.strip() for c in self.categories.value.splitlines() if c.strip()]
+        cats = [c.strip() for c in self.categories.value.splitlines() if c.strip()][:20]
         await interaction.client.cogs["Forms"].config.guild(interaction.guild).ticket_categories.set(cats)
         await interaction.response.send_message(
             f"✅ Categories updated: {', '.join(cats)}", ephemeral=True
