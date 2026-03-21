@@ -6,6 +6,7 @@ from redbot.core.bot import Red
 from redbot.core.data_manager import cog_data_path
 from .tickets import TicketManager
 from .applications import ApplicationManager
+from .views import WizardStep1View
 
 
 class Forms(commands.Cog):
@@ -61,7 +62,13 @@ class Forms(commands.Cog):
     @commands.admin_or_permissions(administrator=True)
     async def forms_setup(self, ctx: commands.Context) -> None:
         """Run the first-time setup wizard."""
-        pass
+        view = WizardStep1View(self.config, ctx.guild.id, self.bot)
+        embed = discord.Embed(
+            title="Forms Setup — Step 1 of 7",
+            description="Select the **ticket channel** where the Open Ticket button will be posted.",
+            color=discord.Color.blurple(),
+        )
+        await ctx.send(embed=embed, view=view)
 
     @forms_group.command(name="settings")
     # Permission check is dynamic (reads ticket_staff_role from Config at runtime).
