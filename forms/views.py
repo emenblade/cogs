@@ -716,7 +716,7 @@ class DenyReasonModal(discord.ui.Modal, title="Denial Reason"):
             "❌ Application denied. User has been notified.", ephemeral=True
         )
         # Archive but do NOT lock — locked threads block button interactions.
-        await self.thread.edit(archived=True)
+        await self.thread.edit(archived=True, locked=True)
 
 
 class ReviewView(discord.ui.View):
@@ -808,15 +808,15 @@ class ReviewView(discord.ui.View):
             if closed_tag:
                 current_tags.append(closed_tag)
             try:
-                await interaction.channel.edit(applied_tags=current_tags)
+                await interaction.channel.edit(applied_tags=current_tags, archived=True, locked=True)
             except discord.HTTPException:
-                pass
+                await interaction.channel.edit(archived=True, locked=True)
+        else:
+            await interaction.channel.edit(archived=True, locked=True)
 
         await interaction.response.send_message(
             "✅ Application approved. User notified.", ephemeral=True
         )
-        # Archive but do NOT lock — locked threads block button interactions.
-        await interaction.channel.edit(archived=True)
 
     @discord.ui.button(
         label="❌ Deny", style=discord.ButtonStyle.red, custom_id="forms:deny:_"
