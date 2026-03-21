@@ -725,6 +725,81 @@ class ConfirmView(discord.ui.View):
         self.stop()
 
 
+class _ChannelSelectStepView(discord.ui.View):
+    """Single channel select step used during application assignment."""
+
+    def __init__(self):
+        super().__init__(timeout=120)
+        self.selected_channel = None
+
+    @discord.ui.select(
+        cls=discord.ui.ChannelSelect,
+        placeholder="Select a channel…",
+        channel_types=[discord.ChannelType.text],
+    )
+    async def channel_select(self, interaction: discord.Interaction, select: discord.ui.ChannelSelect):
+        self.selected_channel = select.values[0]
+        await interaction.response.defer()
+        self.stop()
+
+
+class _RoleSelectStepView(discord.ui.View):
+    """Single role select step used during application assignment."""
+
+    def __init__(self):
+        super().__init__(timeout=120)
+        self.selected_role_id = None
+
+    @discord.ui.select(
+        cls=discord.ui.RoleSelect,
+        placeholder="Select approval role… (optional)",
+    )
+    async def role_select(self, interaction: discord.Interaction, select: discord.ui.RoleSelect):
+        self.selected_role_id = select.values[0].id if select.values else None
+        await interaction.response.defer()
+        self.stop()
+
+    @discord.ui.button(label="Skip (no auto-role)", style=discord.ButtonStyle.grey)
+    async def skip(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
+        self.stop()
+
+
+class _CooldownModal(discord.ui.Modal, title="Re-application Cooldown"):
+    days = discord.ui.TextInput(
+        label="Cooldown (days)",
+        placeholder="7",
+        max_length=3,
+        required=False,
+    )
+
+    def __init__(self):
+        super().__init__()
+        self.cooldown_days = 7
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            n = int(self.days.value or "7")
+            self.cooldown_days = max(0, n)
+        except ValueError:
+            self.cooldown_days = 7
+        await interaction.response.defer()
+        self.stop()
+
+
+class _OpenModalView(discord.ui.View):
+    """One-button view that opens a modal when clicked."""
+
+    def __init__(self, modal: discord.ui.Modal):
+        super().__init__(timeout=120)
+        self._modal = modal
+
+    @discord.ui.button(label="Set Cooldown", style=discord.ButtonStyle.blurple)
+    async def open_modal(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.stop()
+        await interaction.response.send_modal(self._modal)
+
+
 class ApplicationSettingsView(discord.ui.View):
     def __init__(self, config: Config, bot):
         super().__init__(timeout=180)
@@ -740,7 +815,7 @@ class ApplicationSettingsView(discord.ui.View):
         from .applications import ApplicationManager
         manager = ApplicationManager(self.bot, self.config, cog_data_path(self.bot.cogs["Forms"]))
         try:
-            await interaction.user.send("Starting application builder…")
+            await interaction.user.create_dm()
         except discord.Forbidden:
             await interaction.followup.send(
                 "Please enable DMs to use the application builder.", ephemeral=True
@@ -795,8 +870,70 @@ class ApplicationSettingsView(discord.ui.View):
 
     @discord.ui.button(label="📌 Assign to Channel", style=discord.ButtonStyle.grey)
     async def assign_app(self, interaction: discord.Interaction, button: discord.ui.Button):
+        from redbot.core.data_manager import cog_data_path
+        from .applications import ApplicationManager
+        manager = ApplicationManager(self.bot, self.config, cog_data_path(self.bot.cogs["Forms"]))
+        apps = await manager.load_applications()
+        if not apps:
+            await interaction.response.send_message("No applications saved yet.", ephemeral=True)
+            return
+        options = [discord.SelectOption(label=a["name"], value=slug) for slug, a in apps.items()]
+        view = _SingleSelectView(options, placeholder="Select application to assign…")
         await interaction.response.send_message(
-            "Use the select menus to assign an application to a channel.", ephemeral=True
+            "**Step 1 of 3:** Which application do you want to assign to a channel?",
+            view=view,
+            ephemeral=True,
+        )
+        await view.wait()
+        if not view.selected:
+            return
+        slug = view.selected
+        app = apps[slug]
+
+        # Step 2: pick channel
+        channel_view = _ChannelSelectStepView()
+        await interaction.followup.send(
+            f"**Step 2 of 3:** Select the channel where the **{app['name']}** Apply button will be posted.",
+            view=channel_view,
+            ephemeral=True,
+        )
+        await channel_view.wait()
+        if not channel_view.selected_channel:
+            return
+
+        # Step 3: pick approval role
+        role_view = _RoleSelectStepView()
+        await interaction.followup.send(
+            "**Step 3 of 3:** Select the role to grant on approval (or skip to set no auto-role).",
+            view=role_view,
+            ephemeral=True,
+        )
+        await role_view.wait()
+
+        # Cooldown modal
+        cooldown_modal = _CooldownModal()
+        await interaction.followup.send(
+            "Almost done! Click below to set the re-application cooldown.",
+            view=_OpenModalView(cooldown_modal),
+            ephemeral=True,
+        )
+        await cooldown_modal.wait()
+
+        approval_role_id = role_view.selected_role_id
+        cooldown_days = cooldown_modal.cooldown_days
+
+        await manager.assign_application(
+            guild=interaction.guild,
+            slug=slug,
+            name=app["name"],
+            description=app["description"],
+            channel=channel_view.selected_channel,
+            approval_role_id=approval_role_id,
+            cooldown_days=cooldown_days,
+        )
+        await interaction.followup.send(
+            f"✅ **{app['name']}** has been assigned to {channel_view.selected_channel.mention}!",
+            ephemeral=True,
         )
 
 

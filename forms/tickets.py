@@ -37,6 +37,16 @@ class TicketManager:
         # Create channel
         category_id = await guild_conf.ticket_category()
         category = guild.get_channel(category_id)
+        if category is None:
+            # Can't create ticket — no category configured or it was deleted
+            try:
+                await interaction.followup.send(
+                    "⚠️ Ticket category not found. Please ask staff to re-run setup.",
+                    ephemeral=True,
+                )
+            except Exception:
+                pass
+            return
         safe_name = sanitize_channel_name(interaction.user.display_name)
         channel_name = f"{safe_name}-{counter:04d}"
 
