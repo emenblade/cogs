@@ -53,6 +53,28 @@ class Forms(commands.Cog):
         """Re-register persistent views after bot restart. Implemented in Task 14."""
         pass
 
+    @commands.Cog.listener()
+    async def on_message(self, message: discord.Message) -> None:
+        """Route DM replies to the application flow."""
+        if message.guild is not None or message.author.bot:
+            return
+        if self.applications is None:
+            return
+
+        state = await self.config.user(message.author).active_application()
+        if state is None:
+            return
+
+        guild = self.bot.get_guild(state["guild_id"])
+        if guild is None:
+            return
+
+        member = guild.get_member(message.author.id)
+        if member is None:
+            return
+
+        await self.applications._handle_application_reply(member, guild, state, message)
+
     @commands.group(name="forms")
     @commands.guild_only()
     async def forms_group(self, ctx: commands.Context) -> None:

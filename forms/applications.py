@@ -137,3 +137,72 @@ class ApplicationManager:
         }
         await guild_conf.application_assignments.set(assignments)
         return msg
+
+    async def start_application(
+        self,
+        user: discord.User,
+        guild: discord.Guild,
+        slug: str,
+        dm: discord.DMChannel,
+    ) -> None:
+        """Set active_application state and send question 1 via DM."""
+        apps = await self.load_applications()
+        app = apps.get(slug)
+        if not app:
+            await dm.send("❌ This application no longer exists. Please contact staff.")
+            return
+
+        state = {
+            "slug": slug,
+            "guild_id": guild.id,
+            "question_index": 0,
+            "answers": [],
+        }
+        await self.config.user(user).active_application.set(state)
+
+        total = len(app["questions"])
+        await dm.send(
+            f"👋 Welcome to the **{app['name']}** application! ({total} question(s))\n\n"
+            f"**Question 1 of {total}:** {app['questions'][0]}"
+        )
+
+    async def _handle_application_reply(
+        self,
+        member: discord.Member,
+        guild: discord.Guild,
+        state: dict,
+        message: discord.Message,
+    ) -> None:
+        """Process one DM reply, save the answer, and advance the application."""
+        apps = await self.load_applications()
+        app = apps.get(state["slug"])
+        if not app:
+            return
+
+        new_state = {
+            **state,
+            "question_index": state["question_index"] + 1,
+            "answers": state["answers"] + [message.content.strip()],
+        }
+        questions = app["questions"]
+        total = len(questions)
+
+        if new_state["question_index"] >= total:
+            # All questions answered — submit
+            await self.config.user(member).active_application.set(None)
+            await message.channel.send(
+                "✅ **Application submitted!** Staff will review your answers within 5 days. "
+                "We'll DM you with their decision. Thank you!"
+            )
+            await self._post_review_forum(member, guild, app, new_state["answers"])
+        else:
+            # Save progress and send next question
+            await self.config.user(member).active_application.set(new_state)
+            next_q = questions[new_state["question_index"]]
+            await message.channel.send(
+                f"**Question {new_state['question_index'] + 1} of {total}:** {next_q}"
+            )
+
+    async def _post_review_forum(self, member, guild, app, answers):
+        """Post application to staff forum for review. Implemented in Task 11."""
+        pass
