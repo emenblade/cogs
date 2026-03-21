@@ -511,6 +511,74 @@ class ApplyView(discord.ui.View):
         await manager.start_application(interaction.user, interaction.guild, self.slug, dm)
 
 
+def _disabled_review_view(outcome: str) -> discord.ui.View:
+    """Return a view with both review buttons disabled, highlighting which was used."""
+    view = discord.ui.View()
+    view.add_item(discord.ui.Button(
+        label="✅ Approved" if outcome == "approved" else "✅ Approve",
+        style=discord.ButtonStyle.green,
+        disabled=True,
+    ))
+    view.add_item(discord.ui.Button(
+        label="❌ Denied" if outcome == "denied" else "❌ Deny",
+        style=discord.ButtonStyle.red,
+        disabled=True,
+    ))
+    return view
+
+
+class ResetCooldownView(discord.ui.View):
+    """Persistent view posted after review closure to allow staff to reset a cooldown."""
+
+    def __init__(self, config: Config, bot, slug: str, user_id: int):
+        super().__init__(timeout=None)
+        self.config = config
+        self.bot = bot
+        self.slug = slug
+        self.user_id = user_id
+        if self.children:
+            self.children[0].custom_id = f"forms:reset_cooldown:{slug}:{user_id}"
+
+    @discord.ui.button(
+        label="🔄 Reset Cooldown",
+        style=discord.ButtonStyle.grey,
+        custom_id="forms:reset_cooldown:_:_",
+    )
+    async def reset_cooldown(self, interaction: discord.Interaction, button: discord.ui.Button):
+        staff_role_id = await self.config.guild(interaction.guild).ticket_staff_role()
+        is_admin = interaction.user.guild_permissions.administrator
+        has_staff = staff_role_id and any(r.id == staff_role_id for r in interaction.user.roles)
+        if not is_admin and not has_staff:
+            await interaction.response.send_message(
+                "You don't have permission to reset cooldowns.", ephemeral=True
+            )
+            return
+
+        user = interaction.guild.get_member(self.user_id) or await self.bot.fetch_user(self.user_id)
+        cooldowns = await self.config.user(user).application_cooldowns()
+        cooldowns.pop(self.slug, None)
+        await self.config.user(user).application_cooldowns.set(cooldowns)
+
+        # Disable button after use (best-effort — may fail in archived threads)
+        button.disabled = True
+        button.label = "✅ Cooldown Reset"
+        try:
+            await interaction.message.edit(view=self)
+        except discord.HTTPException:
+            pass
+
+        # Remove from config so it isn't re-registered on restart
+        assignments = await self.config.guild(interaction.guild).application_assignments()
+        if self.slug in assignments:
+            assignments[self.slug].setdefault("reset_cooldown_messages", {}).pop(str(self.user_id), None)
+            await self.config.guild(interaction.guild).application_assignments.set(assignments)
+
+        await interaction.response.send_message(
+            f"✅ Cooldown for <@{self.user_id}> on **{self.slug.replace('-', ' ').title()}** has been reset.",
+            ephemeral=True,
+        )
+
+
 class DenyReasonModal(discord.ui.Modal, title="Denial Reason"):
     reason = discord.ui.TextInput(
         label="Reason for denial",
@@ -519,7 +587,7 @@ class DenyReasonModal(discord.ui.Modal, title="Denial Reason"):
         max_length=1000,
     )
 
-    def __init__(self, config, bot, slug, user_id, guild_id, thread):
+    def __init__(self, config, bot, slug, user_id, guild_id, thread, review_message):
         super().__init__()
         self.config = config
         self.bot = bot
@@ -527,6 +595,7 @@ class DenyReasonModal(discord.ui.Modal, title="Denial Reason"):
         self.user_id = user_id
         self.guild_id = guild_id
         self.thread = thread
+        self.review_message = review_message
 
     async def on_submit(self, interaction: discord.Interaction):
         import time
@@ -555,17 +624,34 @@ class DenyReasonModal(discord.ui.Modal, title="Denial Reason"):
         assignments = await self.config.guild(guild).application_assignments()
         if self.slug in assignments:
             assignments[self.slug]["active_reviews"].pop(str(self.user_id), None)
-            await self.config.guild(guild).application_assignments.set(assignments)
+
+        # Disable the Approve/Deny buttons on the review message
+        try:
+            await self.review_message.edit(view=_disabled_review_view("denied"))
+        except discord.HTTPException:
+            pass
 
         await self.thread.send(
             f"❌ **Application denied** by {interaction.user.mention}.\n**Reason:** {self.reason.value}"
         )
+
+        # Post persistent Reset Cooldown button and store its message ID
+        reset_view = ResetCooldownView(self.config, self.bot, self.slug, self.user_id)
+        reset_msg = await self.thread.send(
+            "Staff: use the button below to reset this user's cooldown if needed.",
+            view=reset_view,
+        )
+        if self.slug in assignments:
+            assignments[self.slug].setdefault("reset_cooldown_messages", {})[str(self.user_id)] = reset_msg.id
+        await self.config.guild(guild).application_assignments.set(assignments)
+
         # Respond before archiving — archiving the thread first makes the
         # interaction endpoint reject any further responses (error 50083).
         await interaction.response.send_message(
             "❌ Application denied. User has been notified.", ephemeral=True
         )
-        await self.thread.edit(archived=True, locked=True)
+        # Archive but do NOT lock — locked threads block button interactions.
+        await self.thread.edit(archived=True)
 
 
 class ReviewView(discord.ui.View):
@@ -613,16 +699,33 @@ class ReviewView(discord.ui.View):
             cooldowns.pop(self.slug, None)
             await self.config.user(member).application_cooldowns.set(cooldowns)
 
-        # Clean up
+        # Disable the Approve/Deny buttons on the review message
+        try:
+            await interaction.message.edit(view=_disabled_review_view("approved"))
+        except discord.HTTPException:
+            pass
+
+        # Clean up active_reviews
         assignments[self.slug]["active_reviews"].pop(str(self.user_id), None)
-        await self.config.guild(guild).application_assignments.set(assignments)
+
         await interaction.channel.send(
             f"✅ **Application approved** by {interaction.user.mention}."
         )
+
+        # Post persistent Reset Cooldown button and store its message ID
+        reset_view = ResetCooldownView(self.config, self.bot, self.slug, self.user_id)
+        reset_msg = await interaction.channel.send(
+            "Staff: use the button below to reset this user's cooldown if needed.",
+            view=reset_view,
+        )
+        assignments[self.slug].setdefault("reset_cooldown_messages", {})[str(self.user_id)] = reset_msg.id
+        await self.config.guild(guild).application_assignments.set(assignments)
+
         await interaction.response.send_message(
             "✅ Application approved. User notified.", ephemeral=True
         )
-        await interaction.channel.edit(archived=True, locked=True)
+        # Archive but do NOT lock — locked threads block button interactions.
+        await interaction.channel.edit(archived=True)
 
     @discord.ui.button(
         label="❌ Deny", style=discord.ButtonStyle.red, custom_id="forms:deny:_"
@@ -630,7 +733,7 @@ class ReviewView(discord.ui.View):
     async def deny(self, interaction: discord.Interaction, button: discord.ui.Button):
         modal = DenyReasonModal(
             self.config, self.bot, self.slug, self.user_id,
-            self.guild_id, interaction.channel
+            self.guild_id, interaction.channel, interaction.message
         )
         await interaction.response.send_modal(modal)
 

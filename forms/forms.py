@@ -51,7 +51,7 @@ class Forms(commands.Cog):
 
     async def _register_persistent_views(self) -> None:
         """Re-register all persistent views after bot restart."""
-        from .views import TicketPanelView, CloseTicketView, ApplyView, ReviewView
+        from .views import TicketPanelView, CloseTicketView, ApplyView, ReviewView, ResetCooldownView
 
         all_guild_data = await self.config.all_guilds()
 
@@ -75,13 +75,20 @@ class Forms(commands.Cog):
                         ApplyView(self.config, self.bot, slug),
                         message_id=panel_msg_id,
                     )
-                # Review views
+                # Review views (active)
                 for user_id_str, review in assignment.get("active_reviews", {}).items():
                     review_msg_id = review.get("review_message_id")
                     if review_msg_id:
                         self.bot.add_view(
                             ReviewView(self.config, self.bot, slug, int(user_id_str), guild_id),
                             message_id=review_msg_id,
+                        )
+                # Reset cooldown views (closed reviews)
+                for user_id_str, reset_msg_id in assignment.get("reset_cooldown_messages", {}).items():
+                    if reset_msg_id:
+                        self.bot.add_view(
+                            ResetCooldownView(self.config, self.bot, slug, int(user_id_str)),
+                            message_id=reset_msg_id,
                         )
 
         # Close ticket views — iterate all members' open_tickets per guild
