@@ -499,7 +499,6 @@ class ApplyView(discord.ui.View):
         # Check: DMs open
         try:
             dm = await interaction.user.create_dm()
-            await dm.send("Starting your application…")
         except discord.Forbidden:
             await interaction.response.send_message(
                 "Please enable DMs from server members to apply.", ephemeral=True
@@ -507,7 +506,7 @@ class ApplyView(discord.ui.View):
             return
 
         await interaction.response.send_message(
-            "✅ Check your DMs! I've sent you the first question.", ephemeral=True
+            "✅ Check your DMs! Your application has begun.", ephemeral=True
         )
         await manager.start_application(interaction.user, interaction.guild, self.slug, dm)
 
@@ -738,7 +737,8 @@ class _ChannelSelectStepView(discord.ui.View):
         channel_types=[discord.ChannelType.text],
     )
     async def channel_select(self, interaction: discord.Interaction, select: discord.ui.ChannelSelect):
-        self.selected_channel = select.values[0]
+        # Resolve AppCommandChannel to a full TextChannel
+        self.selected_channel = interaction.guild.get_channel(select.values[0].id)
         await interaction.response.defer()
         self.stop()
 
@@ -811,6 +811,8 @@ class ApplicationSettingsView(discord.ui.View):
         modal = CreateApplicationModal()
         await interaction.response.send_modal(modal)
         await modal.wait()
+        if not hasattr(modal, "result_name"):
+            return  # Modal dismissed without submitting
         from redbot.core.data_manager import cog_data_path
         from .applications import ApplicationManager
         manager = ApplicationManager(self.bot, self.config, cog_data_path(self.bot.cogs["Forms"]))
