@@ -168,3 +168,47 @@ async def test_handle_reply_saves_answer_and_advances_index():
         new_state = user_conf.active_application.set.call_args.args[0]
         assert new_state["question_index"] == 1
         assert "My answer to Q1" in new_state["answers"]
+
+
+@pytest.mark.asyncio
+async def test_post_review_forum_creates_thread_with_transcript():
+    """_post_review_forum must create a forum thread tagged APPLICATION."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        mock_conf = MagicMock()
+        guild_conf = MagicMock()
+        guild_conf.ticket_forum = AsyncMock(return_value=777)
+        guild_conf.application_tag_id = AsyncMock(return_value=888)
+        guild_conf.application_assignments = AsyncMock(return_value={
+            "mod-application": {
+                "channel_id": 1, "panel_message_id": 2,
+                "approval_role_id": 3, "cooldown_days": 7,
+                "active_reviews": {}
+            }
+        })
+        guild_conf.application_assignments.set = AsyncMock()
+        mock_conf.guild = MagicMock(return_value=guild_conf)
+
+        mock_guild = MagicMock()
+        mock_forum = MagicMock(spec=discord.ForumChannel)
+        mock_forum.available_tags = [MagicMock(id=888, name="APPLICATION")]
+        mock_thread = AsyncMock()
+        mock_thread.id = 999
+        mock_msg = MagicMock()
+        mock_msg.id = 100
+        mock_forum.create_thread = AsyncMock(return_value=(mock_thread, mock_msg))
+        mock_guild.get_channel = MagicMock(return_value=mock_forum)
+
+        from forms.applications import ApplicationManager
+        manager = ApplicationManager(MagicMock(), mock_conf, Path(tmpdir))
+
+        mock_user = MagicMock()
+        mock_user.id = 123
+        mock_user.name = "testuser"
+        mock_user.mention = "<@123>"
+
+        app = {"name": "Mod", "slug": "mod-application", "questions": ["Q1"], "description": "d"}
+        answers = ["A1"]
+
+        await manager._post_review_forum(mock_user, mock_guild, app, answers)
+
+        mock_forum.create_thread.assert_called_once()

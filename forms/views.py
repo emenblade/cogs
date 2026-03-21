@@ -510,3 +510,120 @@ class ApplyView(discord.ui.View):
             "✅ Check your DMs! I've sent you the first question.", ephemeral=True
         )
         await manager.start_application(interaction.user, interaction.guild, self.slug, dm)
+
+
+class DenyReasonModal(discord.ui.Modal, title="Denial Reason"):
+    reason = discord.ui.TextInput(
+        label="Reason for denial",
+        style=discord.TextStyle.paragraph,
+        placeholder="Please provide a clear reason for the applicant.",
+        max_length=1000,
+    )
+
+    def __init__(self, config, bot, slug, user_id, guild_id, thread):
+        super().__init__()
+        self.config = config
+        self.bot = bot
+        self.slug = slug
+        self.user_id = user_id
+        self.guild_id = guild_id
+        self.thread = thread
+
+    async def on_submit(self, interaction: discord.Interaction):
+        import time
+        guild = interaction.guild
+        user = guild.get_member(self.user_id) or await self.bot.fetch_user(self.user_id)
+
+        # DM the denial reason
+        try:
+            assignments = await self.config.guild(guild).application_assignments()
+            app_conf = assignments.get(self.slug, {})
+            cooldown_days = app_conf.get("cooldown_days", 7)
+            await user.send(
+                f"Your **{self.slug.replace('-', ' ').title()}** application was not approved.\n\n"
+                f"**Reason:** {self.reason.value}"
+            )
+        except discord.Forbidden:
+            pass
+
+        # Set cooldown
+        expiry = time.time() + cooldown_days * 86400
+        cooldowns = await self.config.user(user).application_cooldowns()
+        cooldowns[self.slug] = expiry
+        await self.config.user(user).application_cooldowns.set(cooldowns)
+
+        # Clean up active_reviews
+        assignments = await self.config.guild(guild).application_assignments()
+        if self.slug in assignments:
+            assignments[self.slug]["active_reviews"].pop(str(self.user_id), None)
+            await self.config.guild(guild).application_assignments.set(assignments)
+
+        # Close forum thread
+        await self.thread.edit(archived=True, locked=True)
+        await interaction.response.send_message(
+            "❌ Application denied. User has been notified.", ephemeral=True
+        )
+
+
+class ReviewView(discord.ui.View):
+    """Persistent view on the staff review forum post."""
+
+    def __init__(self, config: Config, bot, slug: str, user_id: int, guild_id: int):
+        super().__init__(timeout=None)
+        self.config = config
+        self.bot = bot
+        self.slug = slug
+        self.user_id = user_id
+        self.guild_id = guild_id
+        # Unique custom_ids per review
+        if len(self.children) >= 2:
+            self.children[0].custom_id = f"forms:approve:{slug}:{user_id}"
+            self.children[1].custom_id = f"forms:deny:{slug}:{user_id}"
+
+    @discord.ui.button(
+        label="✅ Approve", style=discord.ButtonStyle.green, custom_id="forms:approve:_"
+    )
+    async def approve(self, interaction: discord.Interaction, button: discord.ui.Button):
+        guild = interaction.guild
+        assignments = await self.config.guild(guild).application_assignments()
+        app_conf = assignments.get(self.slug, {})
+        approval_role_id = app_conf.get("approval_role_id")
+
+        member = guild.get_member(self.user_id)
+        if member and approval_role_id:
+            role = guild.get_role(approval_role_id)
+            if role:
+                await member.add_roles(role, reason=f"Approved via Forms cog: {self.slug}")
+
+        try:
+            user = member or await self.bot.fetch_user(self.user_id)
+            await user.send(
+                f"🎉 Congratulations! Your **{self.slug.replace('-', ' ').title()}** "
+                "application has been **approved**!"
+            )
+        except discord.Forbidden:
+            pass
+
+        # Clear cooldown on approval
+        if member:
+            cooldowns = await self.config.user(member).application_cooldowns()
+            cooldowns.pop(self.slug, None)
+            await self.config.user(member).application_cooldowns.set(cooldowns)
+
+        # Clean up
+        assignments[self.slug]["active_reviews"].pop(str(self.user_id), None)
+        await self.config.guild(guild).application_assignments.set(assignments)
+        await interaction.channel.edit(archived=True, locked=True)
+        await interaction.response.send_message(
+            "✅ Application approved. User notified.", ephemeral=True
+        )
+
+    @discord.ui.button(
+        label="❌ Deny", style=discord.ButtonStyle.red, custom_id="forms:deny:_"
+    )
+    async def deny(self, interaction: discord.Interaction, button: discord.ui.Button):
+        modal = DenyReasonModal(
+            self.config, self.bot, self.slug, self.user_id,
+            self.guild_id, interaction.channel
+        )
+        await interaction.response.send_modal(modal)

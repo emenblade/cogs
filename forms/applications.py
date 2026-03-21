@@ -203,6 +203,54 @@ class ApplicationManager:
                 f"**Question {new_state['question_index'] + 1} of {total}:** {next_q}"
             )
 
-    async def _post_review_forum(self, member, guild, app, answers):
-        """Post application to staff forum for review. Implemented in Task 11."""
-        pass
+    async def _post_review_forum(
+        self,
+        user: discord.User,
+        guild: discord.Guild,
+        app: dict,
+        answers: list[str],
+    ) -> None:
+        """Create a staff forum review thread with Approve/Deny buttons."""
+        import io
+        from .views import ReviewView
+
+        guild_conf = self.config.guild(guild)
+        forum_id = await guild_conf.ticket_forum()
+        app_tag_id = await guild_conf.application_tag_id()
+
+        forum = guild.get_channel(forum_id) if forum_id else None
+        if not forum or not isinstance(forum, discord.ForumChannel):
+            return
+
+        # Build Q&A transcript
+        lines = [f"**Application: {app['name']}**", f"Applicant: {user.mention} ({user.name})", ""]
+        for i, (q, a) in enumerate(zip(app["questions"], answers), 1):
+            lines.append(f"**Q{i}: {q}**")
+            lines.append(f"A: {a}")
+            lines.append("")
+        transcript = "\n".join(lines)
+
+        tags = [t for t in forum.available_tags if t.id == app_tag_id]
+        view = ReviewView(self.config, self.bot, app["slug"], user.id, guild.id)
+
+        content = transcript[:4000] if len(transcript) <= 4000 else transcript[:4000] + "\n…(see attachment)"
+        thread, first_msg = await forum.create_thread(
+            name=f"{app['name']} — {user.name}",
+            content=content,
+            applied_tags=tags,
+            view=view,
+        )
+
+        # If transcript too long, attach full file
+        if len(transcript) > 4000:
+            fp = io.BytesIO(transcript.encode("utf-8"))
+            await thread.send(file=discord.File(fp, filename=f"{app['slug']}-{user.name}.txt"))
+
+        # Store for restart recovery
+        assignments = await guild_conf.application_assignments()
+        if app["slug"] in assignments:
+            assignments[app["slug"]]["active_reviews"][str(user.id)] = {
+                "thread_id": thread.id,
+                "review_message_id": first_msg.id,
+            }
+            await guild_conf.application_assignments.set(assignments)
