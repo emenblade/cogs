@@ -299,7 +299,6 @@ async def finish_wizard(interaction: discord.Interaction, config: Config, guild_
     """Post the ticket panel in the configured channel and mark setup complete."""
     await interaction.response.defer(ephemeral=True)
 
-    from .tickets import TicketPanelView
     ticket_channel_id = await config.guild_from_id(guild_id).ticket_channel()
     guild = bot.get_guild(guild_id)
     channel = guild.get_channel(ticket_channel_id) if guild else None
@@ -314,7 +313,81 @@ async def finish_wizard(interaction: discord.Interaction, config: Config, guild_
         description="Click the button below to open a support ticket.",
         color=discord.Color.blurple(),
     )
-    panel_view = TicketPanelView(config, guild_id, bot)
+    panel_view = TicketPanelView(config, bot)
     msg = await channel.send(embed=embed, view=panel_view)
     await config.guild_from_id(guild_id).ticket_panel_message.set(msg.id)
     await interaction.followup.send("✅ Setup complete! Ticket panel posted.", ephemeral=True)
+
+
+class TicketPanelView(discord.ui.View):
+    """Persistent view for the ticket channel panel."""
+
+    def __init__(self, config: Config, bot):
+        super().__init__(timeout=None)  # persistent
+        self.config = config
+        self.bot = bot
+
+    @discord.ui.button(
+        label="🎫 Open Ticket",
+        style=discord.ButtonStyle.blurple,
+        custom_id="forms:open_ticket",
+    )
+    async def open_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
+        guild_conf = self.config.guild(interaction.guild)
+
+        # Role gate
+        user_role_id = await guild_conf.ticket_user_role()
+        if user_role_id and not any(r.id == user_role_id for r in interaction.user.roles):
+            await interaction.response.send_message(
+                "You don't have permission to open tickets.", ephemeral=True
+            )
+            return
+
+        # Category guard
+        categories = await guild_conf.ticket_categories()
+        if not categories:
+            await interaction.response.send_message(
+                "Tickets are not fully configured yet. Please contact staff.", ephemeral=True
+            )
+            return
+
+        # Max tickets guard
+        max_open = await guild_conf.ticket_max_open()
+        open_tickets = await self.config.member(interaction.user).open_tickets()
+        if len(open_tickets) >= max_open:
+            await interaction.response.send_message(
+                f"You already have {len(open_tickets)} open ticket(s). "
+                f"Please wait for them to be resolved before opening a new one.",
+                ephemeral=True,
+            )
+            return
+
+        # Show category select
+        view = TicketCategoryView(self.config, self.bot, categories)
+        await interaction.response.send_message(
+            "Please select a category for your ticket:", view=view, ephemeral=True
+        )
+
+
+class TicketCategoryView(discord.ui.View):
+    """Ephemeral category select shown after clicking Open Ticket."""
+
+    def __init__(self, config: Config, bot, categories: list[str]):
+        super().__init__(timeout=120)
+        self.config = config
+        self.bot = bot
+        options = [discord.SelectOption(label=c, value=c) for c in categories[:25]]
+        self.add_item(self._CategorySelect(options))
+
+    class _CategorySelect(discord.ui.Select):
+        def __init__(self, options):
+            super().__init__(placeholder="Select a category…", options=options)
+
+        async def callback(self, interaction: discord.Interaction):
+            from .tickets import TicketManager
+            category = self.values[0]
+            manager = TicketManager(interaction.client, interaction.client.cogs["Forms"].config)
+            await interaction.response.edit_message(
+                content="Creating your ticket…", view=None
+            )
+            await manager.create_ticket(interaction, category)
