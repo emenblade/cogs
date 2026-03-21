@@ -2,6 +2,7 @@
 from __future__ import annotations
 import discord
 from redbot.core import Config
+from .utils import check_staff_role
 
 
 class _WizardStepView(discord.ui.View):
@@ -391,3 +392,33 @@ class TicketCategoryView(discord.ui.View):
                 content="Creating your ticket…", view=None
             )
             await manager.create_ticket(interaction, category)
+
+
+class CloseTicketView(discord.ui.View):
+    """Persistent view posted in each ticket channel. Only staff can close."""
+
+    def __init__(self, config: Config, bot, channel_id: int, staff_role_id: int | None):
+        super().__init__(timeout=None)
+        self.config = config
+        self.bot = bot
+        self.channel_id = channel_id
+        self.staff_role_id = staff_role_id
+        # Make custom_id unique per channel so Discord can distinguish buttons
+        if self.children:
+            self.children[0].custom_id = f"forms:close_ticket:{channel_id}"
+
+    @discord.ui.button(
+        label="🔒 Close Ticket",
+        style=discord.ButtonStyle.red,
+        custom_id="forms:close_ticket",
+    )
+    async def close_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not check_staff_role(interaction, self.staff_role_id):
+            await interaction.response.send_message(
+                "Only staff can close tickets.", ephemeral=True
+            )
+            return
+        from .tickets import TicketManager
+        manager = TicketManager(interaction.client, self.config)
+        await interaction.response.defer()
+        await manager.close_ticket(interaction.channel, interaction.guild)
