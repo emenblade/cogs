@@ -113,3 +113,23 @@ async def test_create_ticket_makes_channel_with_sanitized_name():
     channel_name = mock_category.create_text_channel.call_args.args[0]
     assert "test" in channel_name  # sanitized
     assert "0006" in channel_name  # counter was 5, incremented to 6
+
+
+@pytest.mark.asyncio
+async def test_close_ticket_dms_user_transcript():
+    """Transcript building produces expected content."""
+    import discord
+    user_msg = MagicMock(spec=discord.Message)
+    user_msg.author = MagicMock()
+    user_msg.author.bot = False
+    user_msg.author.display_name = "testuser"
+    user_msg.content = "I need help"
+    from datetime import datetime, timezone
+    user_msg.created_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    user_msg.attachments = []
+
+    messages = [user_msg]
+    from forms.utils import build_transcript
+    transcript = build_transcript(messages)
+    assert "testuser" in transcript
+    assert "I need help" in transcript

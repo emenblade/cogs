@@ -1,6 +1,7 @@
 """Ticket creation, closing, and transcript logic."""
 from __future__ import annotations
 import asyncio
+import io
 import discord
 from redbot.core import Config
 from redbot.core.bot import Red
@@ -76,6 +77,74 @@ class TicketManager:
         }
         async with self.config.member(interaction.user).open_tickets() as tickets:
             tickets.append(ticket_entry)
+
+    async def close_ticket(
+        self, channel: discord.TextChannel, guild: discord.Guild
+    ) -> None:
+        """Close a ticket: transcript → DM user → forum post → delete channel."""
+        from redbot.core.data_manager import cog_data_path
+
+        guild_conf = self.config.guild(guild)
+
+        # Collect messages oldest-first
+        messages = [m async for m in channel.history(limit=None, oldest_first=True)]
+        transcript_text = build_transcript(messages)
+
+        # Save transcript to disk
+        transcript_dir = cog_data_path(self.bot.cogs["Forms"]) / "transcripts"
+        transcript_dir.mkdir(parents=True, exist_ok=True)
+        transcript_file = transcript_dir / f"{channel.name}.txt"
+        transcript_file.write_text(transcript_text, encoding="utf-8")
+
+        # Find the ticket opener from config
+        opener = None
+        all_member_data = await self.config.all_members(guild)
+        for member_id_str, data in all_member_data.items():
+            for ticket in data.get("open_tickets", []):
+                if ticket.get("channel_id") == channel.id:
+                    opener = guild.get_member(int(member_id_str))
+                    break
+            if opener:
+                break
+
+        # DM transcript to opener
+        if opener:
+            try:
+                await send_or_attach(
+                    opener,
+                    f"**Transcript for {channel.name}:**\n\n{transcript_text}",
+                    filename=f"{channel.name}.txt",
+                )
+            except discord.Forbidden:
+                pass  # User has DMs closed
+
+        # Post to staff forum
+        forum_id = await guild_conf.ticket_forum()
+        ticket_tag_id = await guild_conf.ticket_tag_id()
+        forum = guild.get_channel(forum_id) if forum_id else None
+        if forum and isinstance(forum, discord.ForumChannel):
+            tags = [t for t in forum.available_tags if t.id == ticket_tag_id]
+            body = transcript_text[:4000] if transcript_text else "(empty)"
+            thread, _first_msg = await forum.create_thread(
+                name=channel.name,
+                content=body,
+                applied_tags=tags,
+            )
+            if len(transcript_text) > 4000:
+                fp = io.BytesIO(transcript_text.encode("utf-8"))
+                await thread.send(
+                    content="Full transcript attached (message too long to inline):",
+                    file=discord.File(fp, filename=f"{channel.name}.txt"),
+                )
+            await thread.edit(archived=True, locked=True)
+
+        # Remove from opener's open_tickets
+        if opener:
+            async with self.config.member(opener).open_tickets() as tickets:
+                tickets[:] = [t for t in tickets if t.get("channel_id") != channel.id]
+
+        # Delete the channel
+        await channel.delete(reason="Ticket closed")
 
     async def post_panel(self, channel: discord.TextChannel) -> discord.Message:
         """Post (or re-post) the persistent ticket panel embed in the given channel."""
