@@ -1,6 +1,7 @@
 """Main Forms cog class."""
 from __future__ import annotations
 import discord
+from discord import app_commands
 from redbot.core import Config, commands
 from redbot.core.bot import Red
 from redbot.core.data_manager import cog_data_path
@@ -124,8 +125,9 @@ class Forms(commands.Cog):
 
         await self.applications._handle_application_reply(member, guild, state, message)
 
-    @commands.group(name="forms")
+    @app_commands.guild_only()
     @commands.guild_only()
+    @commands.hybrid_group(name="forms")
     async def forms_group(self, ctx: commands.Context) -> None:
         """Forms cog commands."""
 
@@ -149,7 +151,7 @@ class Forms(commands.Cog):
         is_admin = ctx.author.guild_permissions.administrator
         has_staff_role = staff_role_id and any(r.id == staff_role_id for r in ctx.author.roles)
         if not is_admin and not has_staff_role:
-            await ctx.send("You don't have permission to use this command.", delete_after=10)
+            await ctx.send("You don't have permission to use this command.", ephemeral=True)
             return
 
         from .views import SettingsPanelView
