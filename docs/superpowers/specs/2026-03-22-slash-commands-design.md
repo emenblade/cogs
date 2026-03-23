@@ -9,18 +9,32 @@ Add Discord slash command support to the Forms cog's two existing admin commands
 
 ## Approach
 
-Convert the `forms` command group from `commands.group` to `commands.hybrid_group`. RedBot's hybrid group makes all subcommands automatically available as both prefix commands and slash commands.
+Convert the `forms` command group from `commands.group` to `commands.hybrid_group`. RedBot's `HybridGroup` makes all subcommands registered via `.command()` automatically available as both prefix commands and slash commands.
 
-**Change:** `forms/forms.py` line 127
+### Changes to `forms/forms.py`
+
+**1. Import:** Add a separate import line for `app_commands`:
 ```python
-# Before
-@commands.group(name="forms")
-
-# After
-@commands.hybrid_group(name="forms")
+import discord
+from discord import app_commands  # add this line
+from redbot.core import Config, commands
 ```
 
-No other changes required. Subcommands (`setup`, `settings`) inherit hybrid behavior. Existing `ctx.send()` calls work identically for both interaction types. Existing permission checks (`@commands.admin_or_permissions`, guild_only, staff role check) remain unchanged.
+**2. Group decorator:** Stack `@app_commands.guild_only()` above `@commands.guild_only()` (retain both — `@commands.guild_only()` guards prefix invocations, `@app_commands.guild_only()` guards slash invocations), and change `@commands.group` to `@commands.hybrid_group`:
+```python
+@app_commands.guild_only()
+@commands.guild_only()
+@commands.hybrid_group(name="forms")
+async def forms_group(self, ctx: commands.Context) -> None:
+    """Forms cog commands."""
+```
+
+**3. Permission-denied message in `forms_settings`:** Add `ephemeral=True` and remove `delete_after=10`. Ephemeral interaction responses cannot be auto-deleted by the bot (they dismiss only when the user closes them), so `delete_after` has no effect for slash command invocations. Removing it keeps behavior consistent across both invocation types:
+```python
+await ctx.send("You don't have permission to use this command.", ephemeral=True)
+```
+
+No other changes required. The subcommand decorators (`@forms_group.command`) do not need modification — `HybridGroup.command()` automatically promotes subcommands to hybrid. All `ctx.send()` calls in the happy path work identically for prefix and slash.
 
 ## Slash Commands Produced
 
