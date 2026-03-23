@@ -1,0 +1,689 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Forms Bot — User Guide</title>
+  <style>
+    :root {
+      --bg: #1e1f22;
+      --surface: #2b2d31;
+      --surface2: #313338;
+      --border: #3f4147;
+      --accent: #5865f2;
+      --accent-light: #7289da;
+      --green: #57f287;
+      --red: #ed4245;
+      --yellow: #fee75c;
+      --text: #dbdee1;
+      --muted: #949ba4;
+      --heading: #ffffff;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      font-size: 15px;
+    }
+    .sidebar {
+      position: fixed;
+      top: 0; left: 0;
+      width: 240px;
+      height: 100vh;
+      background: var(--surface);
+      border-right: 1px solid var(--border);
+      overflow-y: auto;
+      padding: 24px 0;
+      z-index: 100;
+    }
+    .sidebar h2 {
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      padding: 0 16px 8px;
+    }
+    .sidebar a {
+      display: block;
+      padding: 6px 16px;
+      color: var(--text);
+      text-decoration: none;
+      font-size: 14px;
+      border-radius: 4px;
+      margin: 1px 8px;
+    }
+    .sidebar a:hover { background: var(--border); color: var(--heading); }
+    .sidebar a.active { background: var(--accent); color: #fff; }
+    .sidebar .section-label {
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      padding: 16px 16px 4px;
+    }
+    main {
+      margin-left: 240px;
+      max-width: 820px;
+      padding: 48px 48px 80px;
+    }
+    h1 { font-size: 32px; color: var(--heading); margin-bottom: 8px; }
+    h2 { font-size: 22px; color: var(--heading); margin: 48px 0 16px; padding-top: 8px; border-top: 1px solid var(--border); }
+    h3 { font-size: 17px; color: var(--heading); margin: 32px 0 12px; }
+    h4 { font-size: 14px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; margin: 24px 0 8px; }
+    p { margin-bottom: 12px; }
+    ul, ol { padding-left: 24px; margin-bottom: 12px; }
+    li { margin-bottom: 6px; }
+    a { color: var(--accent-light); }
+    .hero {
+      background: linear-gradient(135deg, #4752c4 0%, #5865f2 100%);
+      border-radius: 12px;
+      padding: 32px;
+      margin-bottom: 40px;
+    }
+    .hero h1 { margin-bottom: 8px; }
+    .hero p { color: rgba(255,255,255,0.85); margin-bottom: 0; font-size: 16px; }
+    .step-list { counter-reset: steps; list-style: none; padding: 0; }
+    .step-list li {
+      counter-increment: steps;
+      display: flex;
+      gap: 16px;
+      margin-bottom: 20px;
+      align-items: flex-start;
+    }
+    .step-list li::before {
+      content: counter(steps);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 28px;
+      height: 28px;
+      background: var(--accent);
+      color: #fff;
+      border-radius: 50%;
+      font-size: 13px;
+      font-weight: 700;
+      flex-shrink: 0;
+      margin-top: 2px;
+    }
+    .callout {
+      border-radius: 8px;
+      padding: 14px 18px;
+      margin: 16px 0;
+      display: flex;
+      gap: 12px;
+      align-items: flex-start;
+    }
+    .callout-icon { font-size: 18px; flex-shrink: 0; margin-top: 1px; }
+    .callout.info { background: rgba(88, 101, 242, 0.15); border-left: 3px solid var(--accent); }
+    .callout.warn { background: rgba(254, 231, 92, 0.1); border-left: 3px solid var(--yellow); }
+    .callout.danger { background: rgba(237, 66, 69, 0.1); border-left: 3px solid var(--red); }
+    .callout.success { background: rgba(87, 242, 135, 0.1); border-left: 3px solid var(--green); }
+    .callout p { margin: 0; }
+    .callout strong { color: var(--heading); }
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 20px;
+      margin: 16px 0;
+    }
+    .card h4 { margin-top: 0; color: var(--heading); text-transform: none; font-size: 15px; letter-spacing: 0; }
+    .discord-button {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 14px;
+      border-radius: 4px;
+      font-size: 13px;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+    .btn-blue { background: var(--accent); color: #fff; }
+    .btn-green { background: #248046; color: #fff; }
+    .btn-red { background: #a12d2f; color: #fff; }
+    .btn-grey { background: #4e5058; color: #fff; }
+    .discord-message {
+      background: var(--surface2);
+      border-radius: 8px;
+      padding: 14px 16px;
+      margin: 10px 0;
+      font-size: 14px;
+      border-left: 3px solid var(--accent);
+    }
+    .discord-message .bot-name { color: var(--accent-light); font-weight: 700; font-size: 13px; }
+    .discord-message .dm-label { font-size: 11px; color: var(--muted); margin-bottom: 6px; }
+    .trouble-item {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      margin: 16px 0;
+      overflow: hidden;
+    }
+    .trouble-header {
+      padding: 14px 18px;
+      background: rgba(237, 66, 69, 0.08);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 600;
+      color: var(--heading);
+    }
+    .trouble-body { padding: 16px 18px; }
+    .trouble-body p { margin-bottom: 8px; }
+    .trouble-body p:last-child { margin-bottom: 0; }
+    .fix-label { font-size: 12px; font-weight: 700; color: var(--green); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px; }
+    table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 14px; }
+    th { background: var(--surface); color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--border); }
+    td { padding: 10px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+    tr:last-child td { border-bottom: none; }
+    .tag {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 3px;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .tag-blue { background: rgba(88,101,242,0.25); color: var(--accent-light); }
+    .tag-red { background: rgba(237,66,69,0.2); color: #f04747; }
+    .tag-green { background: rgba(87,242,135,0.15); color: var(--green); }
+    code {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      padding: 1px 5px;
+      font-family: "Consolas", "Courier New", monospace;
+      font-size: 13px;
+      color: #e3e5e8;
+    }
+    .divider { border: none; border-top: 1px solid var(--border); margin: 40px 0; }
+    @media (max-width: 768px) {
+      .sidebar { display: none; }
+      main { margin-left: 0; padding: 24px 20px 60px; }
+    }
+  </style>
+</head>
+<body>
+
+<nav class="sidebar">
+  <h2>Forms Bot</h2>
+  <a href="#overview">Overview</a>
+  <div class="section-label">Tickets</div>
+  <a href="#open-ticket">Opening a Ticket</a>
+  <a href="#ticket-chat">In Your Ticket</a>
+  <a href="#close-ticket">Closing a Ticket</a>
+  <div class="section-label">Applications</div>
+  <a href="#apply">Submitting an Application</a>
+  <a href="#app-answers">Answering Questions</a>
+  <a href="#app-result">After You Apply</a>
+  <div class="section-label">Troubleshooting</div>
+  <a href="#trouble-buttons">Buttons Not Working</a>
+  <a href="#trouble-dms">DM Issues</a>
+  <a href="#trouble-timeout">Timed Out</a>
+  <a href="#trouble-ticket">Ticket Problems</a>
+  <a href="#trouble-app">Application Problems</a>
+  <div class="section-label">Quick Reference</div>
+  <a href="#faq">FAQ</a>
+</nav>
+
+<main>
+
+  <div class="hero">
+    <h1>📋 Forms Bot — User Guide</h1>
+    <p>Everything you need to open support tickets and submit applications on our server.</p>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════ OVERVIEW -->
+  <section id="overview">
+    <h2>Overview</h2>
+    <p>
+      The Forms bot handles two things on this server:
+    </p>
+    <div style="display:grid; grid-template-columns: 1fr 1fr; gap:16px; margin: 16px 0;">
+      <div class="card">
+        <h4>🎫 Support Tickets</h4>
+        <p>Need help from staff? Open a private ticket channel. Only you and staff can see it. When your issue is resolved, a staff member closes it.</p>
+      </div>
+      <div class="card">
+        <h4>📋 Applications</h4>
+        <p>Applying for a role or position on the server? Click Apply and answer questions in your DMs. Staff review your answers privately.</p>
+      </div>
+    </div>
+    <p>Everything is done through buttons and menus — you don't need to type any commands.</p>
+  </section>
+
+  <hr class="divider" />
+
+  <!-- ═══════════════════════════════════════════════════════ TICKETS -->
+  <section id="open-ticket">
+    <h2>Opening a Ticket</h2>
+    <p>Find the ticket panel channel on the server. It looks like this:</p>
+    <div class="discord-message">
+      <div class="bot-name">Forms Bot</div>
+      <p><strong>🎫 Open a Ticket</strong></p>
+      <p style="color:var(--muted)">Click the button below to open a support ticket.</p>
+      <br/>
+      <span class="discord-button btn-blue">🎫 Open Ticket</span>
+    </div>
+
+    <ol class="step-list" style="margin-top: 20px;">
+      <li>
+        <div>
+          <strong>Click "🎫 Open Ticket"</strong><br/>
+          A small menu will appear, visible only to you, asking you to choose a category.
+        </div>
+      </li>
+      <li>
+        <div>
+          <strong>Select a category from the dropdown</strong><br/>
+          Categories are topics like "General Support", "Bug Report", etc. Pick the one that best describes your issue.
+        </div>
+      </li>
+      <li>
+        <div>
+          <strong>Your ticket channel is created</strong><br/>
+          A new private channel appears in the server sidebar. Head there now.
+        </div>
+      </li>
+    </ol>
+
+    <div class="callout warn">
+      <div class="callout-icon">⚠️</div>
+      <p><strong>You have 2 minutes</strong> to pick a category after clicking the button. If the menu disappears before you choose, just click the button again.</p>
+    </div>
+  </section>
+
+  <section id="ticket-chat">
+    <h3>Inside Your Ticket</h3>
+    <p>Once your ticket channel is created, you'll see a welcome message:</p>
+    <div class="discord-message">
+      <div class="bot-name">Forms Bot</div>
+      <p><strong>Ticket #0001 — General Support</strong></p>
+      <p>@YourName, thanks for opening a ticket!</p>
+      <p><strong>Category:</strong> General Support</p>
+      <p style="color:var(--muted)">Please describe your issue in as much detail as possible. Staff will be with you shortly.</p>
+      <br/>
+      <span class="discord-button btn-red">🔒 Close Ticket</span>
+    </div>
+
+    <p>Just type your message describing what you need help with. Staff will reply as soon as they're available.</p>
+
+    <div class="callout info">
+      <div class="callout-icon">ℹ️</div>
+      <p>Only you and staff can see this channel. Feel free to share details, screenshots, or anything else that helps explain your issue.</p>
+    </div>
+
+    <p>You can have up to a set number of tickets open at the same time. If you try to open more than the limit, you'll get a message telling you to wait for your existing tickets to be resolved first.</p>
+  </section>
+
+  <section id="close-ticket">
+    <h3>Closing a Ticket</h3>
+    <p>
+      Only <strong>staff members</strong> can close tickets using the <span class="discord-button btn-red" style="font-size:12px">🔒 Close Ticket</span> button. When a ticket is closed:
+    </p>
+    <ul>
+      <li>A transcript of the conversation is saved.</li>
+      <li>The transcript is sent to you via DM (if your DMs are open — see <a href="#trouble-dms">DM Issues</a>).</li>
+      <li>The ticket channel is deleted.</li>
+    </ul>
+    <div class="callout info">
+      <div class="callout-icon">ℹ️</div>
+      <p>If you need a copy of your ticket conversation, make sure your DMs are open before staff closes the ticket.</p>
+    </div>
+  </section>
+
+  <hr class="divider" />
+
+  <!-- ═══════════════════════════════════════════════════════ APPLICATIONS -->
+  <section id="apply">
+    <h2>Submitting an Application</h2>
+    <p>Find the channel where the application is posted. It will have an Apply button like this:</p>
+    <div class="discord-message">
+      <div class="bot-name">Forms Bot</div>
+      <p><strong>📋 Moderator Application</strong></p>
+      <p style="color:var(--muted)">Apply to join the moderation team. Tell us about yourself and your experience.</p>
+      <br/>
+      <p style="color:var(--muted); font-size:12px">Click Apply to begin. Staff will review your answers.</p>
+      <br/>
+      <span class="discord-button btn-green">📋 Apply</span>
+    </div>
+
+    <div class="callout warn">
+      <div class="callout-icon">⚠️</div>
+      <p><strong>Before you click Apply</strong>, make sure your DMs are open. The bot sends your questions through direct message. If your DMs are closed, you won't be able to apply. See <a href="#trouble-dms">how to enable DMs</a>.</p>
+    </div>
+
+    <ol class="step-list" style="margin-top:20px;">
+      <li>
+        <div>
+          <strong>Click "📋 Apply"</strong><br/>
+          You'll see a confirmation that your first question has been sent to your DMs.
+        </div>
+      </li>
+      <li>
+        <div>
+          <strong>Check your Direct Messages</strong><br/>
+          Open your DMs and look for a message from the bot. It will say something like:<br/>
+          <div class="discord-message" style="margin-top:10px">
+            <div class="dm-label">📩 Direct Message from Forms Bot</div>
+            <p>👋 Welcome to the <strong>Moderator Application</strong>! (5 questions)</p>
+            <p><strong>Question 1 of 5:</strong> Tell us a bit about yourself.</p>
+          </div>
+        </div>
+      </li>
+      <li>
+        <div>
+          <strong>Type your answer and send it</strong><br/>
+          Reply directly in the DM. The bot will confirm your answer was saved and send the next question.
+        </div>
+      </li>
+      <li>
+        <div>
+          <strong>Repeat for all questions</strong><br/>
+          Keep answering each question in the DM. After the last one, you'll get a confirmation that your application was submitted.
+        </div>
+      </li>
+    </ol>
+  </section>
+
+  <section id="app-answers">
+    <h3>Answering Questions</h3>
+    <p>After each answer, the bot confirms it was saved and immediately sends the next question:</p>
+    <div class="discord-message">
+      <div class="dm-label">📩 Direct Message from Forms Bot</div>
+      <p><strong>Question 2 of 5:</strong> How much time can you dedicate per week?</p>
+    </div>
+    <div class="callout warn">
+      <div class="callout-icon">⏰</div>
+      <p><strong>Important — don't leave your DMs for too long.</strong> You have time to answer each question, but if you go completely idle, the application may get stuck. There is no strict timer while you're actively replying — just don't walk away mid-application for hours. If this happens, see <a href="#trouble-timeout">Timed Out</a>.</p>
+    </div>
+    <p>A few things to keep in mind:</p>
+    <ul>
+      <li>Answer in the <strong>DM conversation with the bot</strong>, not in any server channel.</li>
+      <li>Each answer is saved as soon as you send it — you can't go back to edit a previous answer.</li>
+      <li>You can only have <strong>one application in progress at a time</strong>. Finish your current one before starting another.</li>
+    </ul>
+  </section>
+
+  <section id="app-result">
+    <h3>After You Apply</h3>
+    <p>Once all questions are answered, you'll see:</p>
+    <div class="discord-message">
+      <div class="dm-label">📩 Direct Message from Forms Bot</div>
+      <p>✅ <strong>Application submitted!</strong> Staff will review your answers within 5 days. We'll DM you with their decision. Thank you!</p>
+    </div>
+    <p>Staff will review your answers privately. You'll receive a DM when a decision is made:</p>
+    <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin:16px 0;">
+      <div class="discord-message" style="border-left-color: var(--green);">
+        <div class="dm-label">📩 If Approved</div>
+        <p>🎉 Congratulations! Your <strong>Moderator Application</strong> has been <strong>approved</strong>!</p>
+      </div>
+      <div class="discord-message" style="border-left-color: var(--red);">
+        <div class="dm-label">📩 If Denied</div>
+        <p>Your application was not approved.<br/><br/><strong>Reason:</strong> [Staff will explain here]</p>
+      </div>
+    </div>
+    <p>If you're denied, there's a waiting period before you can apply again. The bot will tell you how long if you try to click Apply before the cooldown is up.</p>
+  </section>
+
+  <hr class="divider" />
+
+  <!-- ═══════════════════════════════════════════════════════ TROUBLESHOOTING -->
+  <section id="troubleshooting">
+    <h2>Troubleshooting</h2>
+    <p>Something went wrong? Find your issue below.</p>
+  </section>
+
+  <section id="trouble-buttons">
+    <h3>Buttons Not Responding</h3>
+
+    <div class="trouble-item">
+      <div class="trouble-header"><span>😕</span> I click a button and nothing happens</div>
+      <div class="trouble-body">
+        <p>This usually means Discord had a brief hiccup. Try these in order:</p>
+        <div class="fix-label">Fix</div>
+        <ol>
+          <li>Wait 5–10 seconds and try again.</li>
+          <li>Refresh Discord (press <code>Ctrl+R</code> on PC, or close and reopen the app on mobile).</li>
+          <li>If the button is greyed out or looks faded, the panel has expired — ask staff to re-post it.</li>
+        </ol>
+      </div>
+    </div>
+
+    <div class="trouble-item">
+      <div class="trouble-header"><span>🔘</span> The button is greyed out / disabled</div>
+      <div class="trouble-body">
+        <p>Greyed-out buttons usually mean the panel has been replaced by a newer one, or the bot was recently restarted and hasn't fully loaded yet.</p>
+        <div class="fix-label">Fix</div>
+        <ul>
+          <li>Wait a minute and try again — the bot may be starting up.</li>
+          <li>Ask a staff member to re-post the ticket panel using the settings panel.</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="trouble-item">
+      <div class="trouble-header"><span>🚫</span> "You don't have permission to open tickets"</div>
+      <div class="trouble-body">
+        <p>Your account is missing the required role to open tickets on this server.</p>
+        <div class="fix-label">Fix</div>
+        <ul>
+          <li>Check if there's a role you need to obtain first (read the server rules or ask in a general channel).</li>
+          <li>If you believe you should have access, contact a staff member.</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="trouble-item">
+      <div class="trouble-header"><span>🔢</span> "You already have X open tickets"</div>
+      <div class="trouble-body">
+        <p>There is a limit on how many tickets you can have open at the same time.</p>
+        <div class="fix-label">Fix</div>
+        <ul>
+          <li>Check your existing open ticket channels and follow up there.</li>
+          <li>Wait for your existing tickets to be resolved and closed by staff.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section id="trouble-dms">
+    <h3>DM Issues</h3>
+
+    <div class="trouble-item">
+      <div class="trouble-header"><span>📵</span> "Please enable DMs from server members to apply"</div>
+      <div class="trouble-body">
+        <p>Your Discord privacy settings are blocking the bot from sending you a DM. This is the most common issue with applications.</p>
+        <div class="fix-label">How to enable DMs on PC</div>
+        <ol>
+          <li>Right-click the server icon in the left sidebar.</li>
+          <li>Click <strong>Privacy Settings</strong>.</li>
+          <li>Turn on <strong>"Allow direct messages from server members"</strong>.</li>
+          <li>Go back and click the Apply button again.</li>
+        </ol>
+        <div class="fix-label" style="margin-top:12px">How to enable DMs on Mobile</div>
+        <ol>
+          <li>Tap the server name at the top.</li>
+          <li>Tap <strong>Privacy Settings</strong>.</li>
+          <li>Turn on <strong>"Allow direct messages"</strong>.</li>
+          <li>Go back and tap the Apply button again.</li>
+        </ol>
+        <div class="callout info" style="margin-top:12px">
+          <div class="callout-icon">ℹ️</div>
+          <p>You only need to allow DMs from <em>this server</em>. You don't have to allow DMs from all servers. Once you're done with the application you can turn it off again.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="trouble-item">
+      <div class="trouble-header"><span>📭</span> I clicked Apply but never got a DM</div>
+      <div class="trouble-body">
+        <p>The bot sent the message, but it may be hidden or you're looking in the wrong place.</p>
+        <div class="fix-label">Fix</div>
+        <ol>
+          <li>In Discord, click the <strong>speech bubble icon</strong> (Direct Messages) at the top of the left sidebar.</li>
+          <li>Look for <strong>Forms Bot</strong> in your DM list — it may be scrolled up.</li>
+          <li>If DMs are enabled but you still don't see it, try clicking Apply again. If it says "you already have an application in progress", the DM was sent — just scroll up in your DM list to find it.</li>
+        </ol>
+      </div>
+    </div>
+
+    <div class="trouble-item">
+      <div class="trouble-header"><span>📨</span> I wasn't notified when my application was decided</div>
+      <div class="trouble-body">
+        <p>The bot sends the decision via DM. If you didn't receive it, your DMs were likely closed when staff made the decision.</p>
+        <div class="fix-label">Fix</div>
+        <ul>
+          <li>Enable DMs (see above) and ask a staff member to let you know the outcome.</li>
+          <li>If you were approved, check whether your roles on the server have changed.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section id="trouble-timeout">
+    <h3>Timed Out</h3>
+    <p>Many of the bot's menus have a time limit. If you wait too long, they expire and you'll need to start again. Here's what each timeout means and what to do.</p>
+
+    <div class="trouble-item">
+      <div class="trouble-header"><span>⏰</span> The category menu disappeared after I clicked "Open Ticket"</div>
+      <div class="trouble-body">
+        <p>The category selection menu has a <strong>2-minute timeout</strong>. If you didn't pick a category in time, it disappeared.</p>
+        <div class="fix-label">Fix</div>
+        <p>Simply click the <span class="discord-button btn-blue" style="font-size:12px">🎫 Open Ticket</span> button again. No data was lost.</p>
+      </div>
+    </div>
+
+    <div class="trouble-item">
+      <div class="trouble-header"><span>⏰</span> My application got stuck / the bot stopped responding in DMs</div>
+      <div class="trouble-body">
+        <p>The application DM flow doesn't have a strict per-question timer while you're actively replying. However, if you left the DM conversation idle for a very long time (many hours) without sending anything, the internal session may have expired.</p>
+        <p>You'll know something went wrong if you reply in the DM and nothing happens — the bot doesn't ask the next question and doesn't confirm anything.</p>
+        <div class="fix-label">Fix</div>
+        <ol>
+          <li>Go back to the application channel and try clicking <strong>Apply</strong> again.</li>
+          <li>If it says "You already have an application in progress", contact a staff member — they can reset your application state so you can start fresh.</li>
+          <li>Note: Any answers you already sent are <strong>not</strong> saved if the session expired. You'll need to answer all questions again from the beginning.</li>
+        </ol>
+        <div class="callout warn">
+          <div class="callout-icon">⚠️</div>
+          <p>To avoid this: once you start an application, try to complete it in one sitting. The questions aren't timed while you're actively typing, but don't leave Discord for hours mid-application.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="trouble-ticket">
+    <h3>Ticket Problems</h3>
+
+    <div class="trouble-item">
+      <div class="trouble-header"><span>❓</span> My ticket channel disappeared</div>
+      <div class="trouble-body">
+        <p>Ticket channels are deleted when a staff member closes the ticket. This is normal.</p>
+        <div class="fix-label">What about my conversation?</div>
+        <ul>
+          <li>The bot should have sent you a transcript via DM when the ticket was closed.</li>
+          <li>If you didn't receive the transcript, your DMs were likely closed. Contact staff if you need the information.</li>
+          <li>If your issue isn't resolved, you can open a new ticket.</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="trouble-item">
+      <div class="trouble-header"><span>⚠️</span> "Ticket category not found. Please ask staff to re-run setup."</div>
+      <div class="trouble-body">
+        <p>The Discord category where tickets are created was deleted or moved. The bot can't create new ticket channels until this is fixed.</p>
+        <div class="fix-label">Fix</div>
+        <p>This requires a staff member or admin to fix. Let them know so they can re-run <code>/forms setup</code> or update the settings.</p>
+      </div>
+    </div>
+
+    <div class="trouble-item">
+      <div class="trouble-header"><span>⚠️</span> "Tickets are not fully configured yet"</div>
+      <div class="trouble-body">
+        <p>Setup hasn't been completed, or the ticket categories were deleted from the settings.</p>
+        <div class="fix-label">Fix</div>
+        <p>A staff member or admin needs to complete setup or re-add categories via <code>/forms settings</code>.</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="trouble-app">
+    <h3>Application Problems</h3>
+
+    <div class="trouble-item">
+      <div class="trouble-header"><span>⏳</span> "You can re-apply in Xd Xh"</div>
+      <div class="trouble-body">
+        <p>You were previously denied and there's a waiting period before you can apply again.</p>
+        <div class="fix-label">What to do</div>
+        <ul>
+          <li>Wait until the cooldown expires, then click Apply again.</li>
+          <li>Use the waiting time to work on your application — review any feedback staff gave you in the denial DM.</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="trouble-item">
+      <div class="trouble-header"><span>🔄</span> "You already have an application in progress"</div>
+      <div class="trouble-body">
+        <p>You clicked Apply but already have an unfinished application from a previous attempt.</p>
+        <div class="fix-label">Fix</div>
+        <ol>
+          <li>Check your DMs with the bot — there may be an unanswered question waiting for you.</li>
+          <li>If you can't find the DM or the bot isn't responding there, contact a staff member to clear your application state.</li>
+        </ol>
+      </div>
+    </div>
+
+    <div class="trouble-item">
+      <div class="trouble-header"><span>❌</span> "This application no longer exists"</div>
+      <div class="trouble-body">
+        <p>The application template was deleted by staff after you clicked Apply.</p>
+        <div class="fix-label">Fix</div>
+        <p>Contact staff to find out if the application is still available or has been replaced.</p>
+      </div>
+    </div>
+  </section>
+
+  <hr class="divider" />
+
+  <!-- ═══════════════════════════════════════════════════════ FAQ -->
+  <section id="faq">
+    <h2>Frequently Asked Questions</h2>
+
+    <h3>Can I edit my answers after I send them?</h3>
+    <p>No. Each answer is recorded the moment you send it in the DM. If you made a mistake, contact staff after submitting and let them know.</p>
+
+    <h3>Can staff see my ticket before I type anything?</h3>
+    <p>Yes. The channel is created as soon as you select a category, and staff have access to it immediately. Type your question as soon as possible.</p>
+
+    <h3>Will I lose my application progress if Discord crashes?</h3>
+    <p>Each answer is saved immediately after you send it. If Discord crashes mid-application, your answers up to that point are safe. Just open your DMs with the bot and answer the next question when you're back.</p>
+
+    <h3>Why did the bot send me "Starting your application…" but then nothing else?</h3>
+    <p>This is a test message the bot sends to confirm your DMs are open. The real first question comes right after. If you only received "Starting your application…" and then nothing, try scrolling up in the DM — the question may have loaded just above it.</p>
+
+    <h3>Can I apply to multiple things at the same time?</h3>
+    <p>No. You can only have one application in progress at a time. Finish your current one first, then apply to the other.</p>
+
+    <h3>What happens if staff never responds to my ticket?</h3>
+    <p>Staff manage tickets as quickly as they can. If your ticket seems to have been missed, you can mention it in a public server channel to get their attention (without repeating the details — just note that your ticket hasn't had a reply).</p>
+
+    <h3>I got approved — when do I get my role?</h3>
+    <p>The role is added automatically the moment staff clicks Approve. If you click on your profile and don't see the role, try leaving and rejoining the server. If it's still missing, contact staff.</p>
+  </section>
+
+  <hr class="divider" />
+
+  <p style="color:var(--muted); font-size:13px; text-align:center;">
+    Still stuck? Ask in a general server channel or open a ticket and describe what's going wrong.
+  </p>
+
+</main>
+
+</body>
+</html>

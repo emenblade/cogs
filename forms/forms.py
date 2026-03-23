@@ -129,12 +129,34 @@ class Forms(commands.Cog):
     @commands.guild_only()
     @commands.hybrid_group(name="forms")
     async def forms_group(self, ctx: commands.Context) -> None:
-        """Forms cog commands."""
+        """Manage the Forms cog — tickets and application forms.
+
+        Use `forms setup` for first-time configuration, or `forms settings`
+        to adjust options after setup. Both commands require administrator or
+        staff role permissions.
+        """
 
     @forms_group.command(name="setup")
     @commands.admin_or_permissions(administrator=True)
     async def forms_setup(self, ctx: commands.Context) -> None:
-        """Run the first-time setup wizard."""
+        """Run the first-time setup wizard (admins only).
+
+        Walks through a 7-step interactive wizard to configure the cog:
+
+        Step 1 — Ticket channel: the channel where the "Open Ticket" panel button is posted.
+        Step 2 — Ticket category: the Discord category under which private ticket channels are created.
+        Step 3 — Ticket user role: the role a member must have to open tickets.
+        Step 4 — Staff role: the role that can close tickets and access the settings panel.
+        Step 5 — Staff forum: the forum channel where closed ticket transcripts and application reviews are archived.
+        Step 6 — Forum tags: TICKET and APPLICATION tags are created automatically in the chosen forum.
+        Step 7 — Categories & limits: up to 5 ticket category names and the max number of open tickets per user.
+
+        Once the wizard completes, the ticket panel embed is posted to the configured channel.
+        Re-running setup overwrites existing settings — use `forms settings` for targeted changes.
+
+        Each wizard step has a 5-minute timeout. If you don't interact within that window
+        the wizard will expire and you'll need to run the command again.
+        """
         view = WizardStep1View(self.config, ctx.guild.id, self.bot)
         embed = discord.Embed(
             title="Forms Setup — Step 1 of 7",
@@ -145,7 +167,27 @@ class Forms(commands.Cog):
 
     @forms_group.command(name="settings")
     async def forms_settings(self, ctx: commands.Context) -> None:
-        """Open the settings panel."""
+        """Open the settings panel (staff and admins).
+
+        Displays a two-section settings panel:
+
+        **Ticket Settings**
+        - Change Ticket Channel — re-point the panel to a different channel.
+        - Edit Categories — update the ticket category names shown to users.
+        - Set Max Tickets — change the per-user open ticket limit (1–20).
+        - Re-post Ticket Panel — use this if the panel message was deleted or lost.
+
+        **Application Settings**
+        - Create Application — opens a name/description modal, then walks you through
+          adding questions via DM (up to 50). Each question has a 10-minute reply window.
+        - Edit Application — select an existing application and update its questions via DM.
+          Each question has a 5-minute reply window.
+        - Delete Application — permanently removes an application template.
+        - Assign to Channel — posts an Apply button embed to a channel, selecting which
+          application, which approval role to grant on approval, and the re-application cooldown.
+
+        The settings panel itself has a 3-minute inactivity timeout.
+        """
         # Dynamic staff role permission check
         staff_role_id = await self.config.guild(ctx.guild).ticket_staff_role()
         is_admin = ctx.author.guild_permissions.administrator
