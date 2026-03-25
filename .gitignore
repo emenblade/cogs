@@ -8,3 +8,5 @@ __pycache__/
 venv/
 discordGSM-appdata/
 debug_docker.txt
+*.db
+discordgsm_source/
