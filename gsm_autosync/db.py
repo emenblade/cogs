@@ -119,6 +119,20 @@ def get_server_by_id(db_path: str, row_id: int) -> dict | None:
             conn.close()
 
 
+def update_server_message_id(db_path: str, row_id: int, message_id: int) -> None:
+    """Set the message_id for a server row so DiscordGSM's background task picks it up."""
+    conn = None
+    try:
+        conn = sqlite3.connect(db_path, timeout=_TIMEOUT)
+        with conn:
+            conn.execute("UPDATE servers SET message_id = ? WHERE id = ?", (message_id, row_id))
+    except sqlite3.OperationalError as e:
+        log.error("Failed to update message_id for row id=%s: %s", row_id, e)
+    finally:
+        if conn:
+            conn.close()
+
+
 def is_db_writable(db_path: str) -> bool:
     """Return True if the DB file exists and is writable."""
     try:
