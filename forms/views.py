@@ -145,16 +145,7 @@ class WizardStep5View(_WizardStepView):
             return
         await self.config.guild_from_id(self.guild_id).ticket_forum.set(self._selected.id)
         self.stop()
-        # Resolve AppCommandChannel to a full ForumChannel object
-        forum = interaction.guild.get_channel(self._selected.id)
-        if not isinstance(forum, discord.ForumChannel):
-            await interaction.response.edit_message(
-                content="⚠️ Could not resolve the selected forum channel. Please try again.",
-                view=None,
-                embed=None,
-            )
-            return
-        await _send_wizard_step6(interaction, self.config, self.guild_id, self.bot, forum)
+        await _send_wizard_step6(interaction, self.config, self.guild_id, self.bot, self._selected)
 
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.red)
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -163,14 +154,13 @@ class WizardStep5View(_WizardStepView):
 
 
 class TicketCategoriesModal(discord.ui.Modal, title="Ticket Categories"):
-    """Modal for entering ticket category names and max-open limit."""
+    """Modal for entering ticket category names (up to 5)."""
 
-    categories = discord.ui.TextInput(
-        label="Categories (one per line, up to 20)",
-        style=discord.TextStyle.paragraph,
-        placeholder="General Support\nBug Report\nBilling",
-        required=True,
-    )
+    cat1 = discord.ui.TextInput(label="Category 1", placeholder="e.g. General Support", required=True)
+    cat2 = discord.ui.TextInput(label="Category 2", placeholder="e.g. Bug Report", required=False)
+    cat3 = discord.ui.TextInput(label="Category 3", placeholder="e.g. Billing", required=False)
+    cat4 = discord.ui.TextInput(label="Category 4", placeholder="Optional", required=False)
+    cat5 = discord.ui.TextInput(label="Category 5", placeholder="Optional", required=False)
     max_open = discord.ui.TextInput(
         label="Max open tickets per user",
         placeholder="3",
@@ -185,9 +175,19 @@ class TicketCategoriesModal(discord.ui.Modal, title="Ticket Categories"):
         self.bot = bot
 
     async def on_submit(self, interaction: discord.Interaction):
-        cats = [line.strip() for line in self.categories.value.splitlines() if line.strip()][:20]
+        categories = [
+            v.strip()
+            for v in [
+                self.cat1.value,
+                self.cat2.value,
+                self.cat3.value,
+                self.cat4.value,
+                self.cat5.value,
+            ]
+            if v.strip()
+        ]
         max_open = max(1, int(self.max_open.value)) if self.max_open.value.strip().isdigit() else 3
-        await self.config.guild_from_id(self.guild_id).ticket_categories.set(cats)
+        await self.config.guild_from_id(self.guild_id).ticket_categories.set(categories)
         await self.config.guild_from_id(self.guild_id).ticket_max_open.set(max_open)
         await finish_wizard(interaction, self.config, self.guild_id, self.bot)
 
@@ -207,38 +207,13 @@ class WizardStep7View(_WizardStepView):
         await interaction.response.edit_message(content="❌ Setup cancelled.", view=None, embed=None)
 
 
-async def _ensure_ticket_forum_tags(forum: discord.ForumChannel, config: Config, guild_id: int) -> bool:
-    """Create TICKET tag in the ticket forum if it doesn't exist; store ID in config.
-
-    Returns True on success, False if the bot lacks Manage Channels permission.
-    """
+async def _ensure_forum_tags(forum: discord.ForumChannel, config: Config, guild_id: int) -> None:
+    """Create TICKET and APPLICATION tags if they don't exist; store IDs in config."""
     existing = {t.name: t for t in forum.available_tags}
-    if "TICKET" in existing:
-        await config.guild_from_id(guild_id).ticket_tag_id.set(existing["TICKET"].id)
-        return True
-    try:
-        tag = await forum.create_tag(name="TICKET")
-        await config.guild_from_id(guild_id).ticket_tag_id.set(tag.id)
-        return True
-    except discord.Forbidden:
-        return False
-
-
-async def _ensure_application_forum_tags(forum: discord.ForumChannel, config: Config, guild_id: int) -> bool:
-    """Create APPLICATION tag in the application forum if it doesn't exist; store ID in config.
-
-    Returns True on success, False if the bot lacks Manage Channels permission.
-    """
-    existing = {t.name: t for t in forum.available_tags}
-    if "APPLICATION" in existing:
-        await config.guild_from_id(guild_id).application_tag_id.set(existing["APPLICATION"].id)
-        return True
-    try:
-        tag = await forum.create_tag(name="APPLICATION")
-        await config.guild_from_id(guild_id).application_tag_id.set(tag.id)
-        return True
-    except discord.Forbidden:
-        return False
+    ticket_tag = existing.get("TICKET") or await forum.create_tag(name="TICKET")
+    app_tag = existing.get("APPLICATION") or await forum.create_tag(name="APPLICATION")
+    await config.guild_from_id(guild_id).ticket_tag_id.set(ticket_tag.id)
+    await config.guild_from_id(guild_id).application_tag_id.set(app_tag.id)
 
 
 async def _send_wizard_step2(interaction: discord.Interaction, config: Config, guild_id: int, bot) -> None:
@@ -275,7 +250,7 @@ async def _send_wizard_step5(interaction: discord.Interaction, config: Config, g
     view = WizardStep5View(config, guild_id, bot)
     embed = discord.Embed(
         title="Forms Setup — Step 5 of 7",
-        description="Select the **forum channel** where **ticket** transcripts will be archived.\n\nYou can set a separate application forum later via Settings → Applications.",
+        description="Select the **forum channel** where ticket and application transcripts will be archived.",
         color=discord.Color.blurple(),
     )
     await interaction.response.edit_message(embed=embed, view=view)
@@ -284,20 +259,11 @@ async def _send_wizard_step5(interaction: discord.Interaction, config: Config, g
 async def _send_wizard_step6(
     interaction: discord.Interaction, config: Config, guild_id: int, bot, forum: discord.ForumChannel
 ) -> None:
-    tag_ok = await _ensure_ticket_forum_tags(forum, config, guild_id)
-    if tag_ok:
-        description = "✅ **TICKET** tag created/confirmed in the forum.\n\nClick **Next** to set up ticket categories."
-    else:
-        description = (
-            "⚠️ Could not create the **TICKET** tag automatically — the bot needs "
-            "**Manage Channels** permission on the forum.\n\n"
-            "You can create the tag manually and the bot will find it next time, "
-            "or grant the permission and re-run setup.\n\nClick **Next** to continue."
-        )
+    await _ensure_forum_tags(forum, config, guild_id)
     embed = discord.Embed(
         title="Forms Setup — Step 6 of 7",
-        description=description,
-        color=discord.Color.green() if tag_ok else discord.Color.orange(),
+        description="✅ Forum tags created: **TICKET** and **APPLICATION**.\n\nClick **Next** to set up ticket categories.",
+        color=discord.Color.green(),
     )
     view = _Step6NextView(config, guild_id, bot)
     await interaction.response.edit_message(embed=embed, view=view)
@@ -322,7 +288,7 @@ async def _send_wizard_step7(interaction: discord.Interaction, config: Config, g
     embed = discord.Embed(
         title="Forms Setup — Step 7 of 7",
         description=(
-            "Click **Enter Categories** to open a form where you can name up to 20 ticket categories "
+            "Click **Enter Categories** to open a form where you can name up to 5 ticket categories "
             "and set the max open tickets per user (default: 3)."
         ),
         color=discord.Color.blurple(),
@@ -474,7 +440,6 @@ class CreateApplicationModal(discord.ui.Modal, title="Create Application"):
     async def on_submit(self, interaction: discord.Interaction):
         self.result_name = self.app_name.value.strip()
         self.result_description = self.description.value.strip()
-        self.stop()
         await interaction.response.send_message(
             f"✅ Application **{self.result_name}** created. "
             "Check your DMs — I'll walk you through adding questions.",
@@ -510,18 +475,6 @@ class ApplyView(discord.ui.View):
             cog_data_path(interaction.client.cogs["Forms"]),
         )
 
-        # Check: allowed roles
-        assignments = await self.config.guild(interaction.guild).application_assignments()
-        app_conf = assignments.get(self.slug, {})
-        allowed_role_ids = app_conf.get("allowed_role_ids", [])
-        if allowed_role_ids:
-            member_role_ids = {r.id for r in interaction.user.roles}
-            if not member_role_ids.intersection(allowed_role_ids):
-                await interaction.response.send_message(
-                    "You don't have the required role to apply for this.", ephemeral=True
-                )
-                return
-
         # Check: already in progress?
         active = await self.config.user(interaction.user).active_application()
         if active is not None:
@@ -546,6 +499,7 @@ class ApplyView(discord.ui.View):
         # Check: DMs open
         try:
             dm = await interaction.user.create_dm()
+            await dm.send("Starting your application…")
         except discord.Forbidden:
             await interaction.response.send_message(
                 "Please enable DMs from server members to apply.", ephemeral=True
@@ -553,77 +507,9 @@ class ApplyView(discord.ui.View):
             return
 
         await interaction.response.send_message(
-            "✅ Check your DMs! Your application has begun.", ephemeral=True
+            "✅ Check your DMs! I've sent you the first question.", ephemeral=True
         )
         await manager.start_application(interaction.user, interaction.guild, self.slug, dm)
-
-
-def _disabled_review_view(outcome: str) -> discord.ui.View:
-    """Return a view with both review buttons disabled, highlighting which was used."""
-    view = discord.ui.View()
-    view.add_item(discord.ui.Button(
-        label="✅ Approved" if outcome == "approved" else "✅ Approve",
-        style=discord.ButtonStyle.green,
-        disabled=True,
-    ))
-    view.add_item(discord.ui.Button(
-        label="❌ Denied" if outcome == "denied" else "❌ Deny",
-        style=discord.ButtonStyle.red,
-        disabled=True,
-    ))
-    return view
-
-
-class ResetCooldownView(discord.ui.View):
-    """Persistent view posted after review closure to allow staff to reset a cooldown."""
-
-    def __init__(self, config: Config, bot, slug: str, user_id: int):
-        super().__init__(timeout=None)
-        self.config = config
-        self.bot = bot
-        self.slug = slug
-        self.user_id = user_id
-        if self.children:
-            self.children[0].custom_id = f"forms:reset_cooldown:{slug}:{user_id}"
-
-    @discord.ui.button(
-        label="🔄 Reset Cooldown",
-        style=discord.ButtonStyle.grey,
-        custom_id="forms:reset_cooldown:_:_",
-    )
-    async def reset_cooldown(self, interaction: discord.Interaction, button: discord.ui.Button):
-        staff_role_id = await self.config.guild(interaction.guild).ticket_staff_role()
-        is_admin = interaction.user.guild_permissions.administrator
-        has_staff = staff_role_id and any(r.id == staff_role_id for r in interaction.user.roles)
-        if not is_admin and not has_staff:
-            await interaction.response.send_message(
-                "You don't have permission to reset cooldowns.", ephemeral=True
-            )
-            return
-
-        user = interaction.guild.get_member(self.user_id) or await self.bot.fetch_user(self.user_id)
-        cooldowns = await self.config.user(user).application_cooldowns()
-        cooldowns.pop(self.slug, None)
-        await self.config.user(user).application_cooldowns.set(cooldowns)
-
-        # Disable button after use (best-effort — may fail in archived threads)
-        button.disabled = True
-        button.label = "✅ Cooldown Reset"
-        try:
-            await interaction.message.edit(view=self)
-        except discord.HTTPException:
-            pass
-
-        # Remove from config so it isn't re-registered on restart
-        assignments = await self.config.guild(interaction.guild).application_assignments()
-        if self.slug in assignments:
-            assignments[self.slug].setdefault("reset_cooldown_messages", {}).pop(str(self.user_id), None)
-            await self.config.guild(interaction.guild).application_assignments.set(assignments)
-
-        await interaction.response.send_message(
-            f"✅ Cooldown for <@{self.user_id}> on **{self.slug.replace('-', ' ').title()}** has been reset.",
-            ephemeral=True,
-        )
 
 
 class DenyReasonModal(discord.ui.Modal, title="Denial Reason"):
@@ -634,7 +520,7 @@ class DenyReasonModal(discord.ui.Modal, title="Denial Reason"):
         max_length=1000,
     )
 
-    def __init__(self, config, bot, slug, user_id, guild_id, thread, review_message):
+    def __init__(self, config, bot, slug, user_id, guild_id, thread):
         super().__init__()
         self.config = config
         self.bot = bot
@@ -642,7 +528,6 @@ class DenyReasonModal(discord.ui.Modal, title="Denial Reason"):
         self.user_id = user_id
         self.guild_id = guild_id
         self.thread = thread
-        self.review_message = review_message
 
     async def on_submit(self, interaction: discord.Interaction):
         import time
@@ -671,52 +556,13 @@ class DenyReasonModal(discord.ui.Modal, title="Denial Reason"):
         assignments = await self.config.guild(guild).application_assignments()
         if self.slug in assignments:
             assignments[self.slug]["active_reviews"].pop(str(self.user_id), None)
+            await self.config.guild(guild).application_assignments.set(assignments)
 
-        # Disable the Approve/Deny buttons on the review message
-        try:
-            await self.review_message.edit(view=_disabled_review_view("denied"))
-        except discord.HTTPException:
-            pass
-
-        # Update thread tags: remove OPEN, add CLOSED
-        forum = self.thread.parent
-        if forum and isinstance(forum, discord.ForumChannel):
-            forum_tags = {t.name: t for t in forum.available_tags}
-            closed_tag = forum_tags.get("CLOSED")
-            if not closed_tag:
-                try:
-                    closed_tag = await forum.create_tag(name="CLOSED")
-                except discord.Forbidden:
-                    closed_tag = None
-            current_tags = [t for t in self.thread.applied_tags if t.name != "OPEN"]
-            if closed_tag:
-                current_tags.append(closed_tag)
-            try:
-                await self.thread.edit(applied_tags=current_tags)
-            except discord.HTTPException:
-                pass
-
-        await self.thread.send(
-            f"❌ **Application denied** by {interaction.user.mention}.\n**Reason:** {self.reason.value}"
-        )
-
-        # Post persistent Reset Cooldown button and store its message ID
-        reset_view = ResetCooldownView(self.config, self.bot, self.slug, self.user_id)
-        reset_msg = await self.thread.send(
-            "Staff: use the button below to reset this user's cooldown if needed.",
-            view=reset_view,
-        )
-        if self.slug in assignments:
-            assignments[self.slug].setdefault("reset_cooldown_messages", {})[str(self.user_id)] = reset_msg.id
-        await self.config.guild(guild).application_assignments.set(assignments)
-
-        # Respond before archiving — archiving the thread first makes the
-        # interaction endpoint reject any further responses (error 50083).
+        # Close forum thread
+        await self.thread.edit(archived=True, locked=True)
         await interaction.response.send_message(
             "❌ Application denied. User has been notified.", ephemeral=True
         )
-        # Archive but do NOT lock — locked threads block button interactions.
-        await self.thread.edit(archived=True, locked=True)
 
 
 class ReviewView(discord.ui.View):
@@ -749,14 +595,6 @@ class ReviewView(discord.ui.View):
             if role:
                 await member.add_roles(role, reason=f"Approved via Forms cog: {self.slug}")
 
-        if member:
-            removal_role_ids = app_conf.get("removal_role_ids", [])
-            if removal_role_ids:
-                roles_to_remove = [guild.get_role(r_id) for r_id in removal_role_ids]
-                roles_to_remove = [r for r in roles_to_remove if r]
-                if roles_to_remove:
-                    await member.remove_roles(*roles_to_remove, reason=f"Approved via Forms cog: {self.slug}")
-
         try:
             user = member or await self.bot.fetch_user(self.user_id)
             await user.send(
@@ -772,48 +610,10 @@ class ReviewView(discord.ui.View):
             cooldowns.pop(self.slug, None)
             await self.config.user(member).application_cooldowns.set(cooldowns)
 
-        # Disable the Approve/Deny buttons on the review message
-        try:
-            await interaction.message.edit(view=_disabled_review_view("approved"))
-        except discord.HTTPException:
-            pass
-
-        # Clean up active_reviews
+        # Clean up
         assignments[self.slug]["active_reviews"].pop(str(self.user_id), None)
-
-        await interaction.channel.send(
-            f"✅ **Application approved** by {interaction.user.mention}."
-        )
-
-        # Post persistent Reset Cooldown button and store its message ID
-        reset_view = ResetCooldownView(self.config, self.bot, self.slug, self.user_id)
-        reset_msg = await interaction.channel.send(
-            "Staff: use the button below to reset this user's cooldown if needed.",
-            view=reset_view,
-        )
-        assignments[self.slug].setdefault("reset_cooldown_messages", {})[str(self.user_id)] = reset_msg.id
         await self.config.guild(guild).application_assignments.set(assignments)
-
-        # Update thread tags: remove OPEN, add CLOSED
-        forum = interaction.channel.parent
-        if forum and isinstance(forum, discord.ForumChannel):
-            forum_tags = {t.name: t for t in forum.available_tags}
-            closed_tag = forum_tags.get("CLOSED")
-            if not closed_tag:
-                try:
-                    closed_tag = await forum.create_tag(name="CLOSED")
-                except discord.Forbidden:
-                    closed_tag = None
-            current_tags = [t for t in interaction.channel.applied_tags if t.name != "OPEN"]
-            if closed_tag:
-                current_tags.append(closed_tag)
-            try:
-                await interaction.channel.edit(applied_tags=current_tags, archived=True, locked=True)
-            except discord.HTTPException:
-                await interaction.channel.edit(archived=True, locked=True)
-        else:
-            await interaction.channel.edit(archived=True, locked=True)
-
+        await interaction.channel.edit(archived=True, locked=True)
         await interaction.response.send_message(
             "✅ Application approved. User notified.", ephemeral=True
         )
@@ -824,21 +624,21 @@ class ReviewView(discord.ui.View):
     async def deny(self, interaction: discord.Interaction, button: discord.ui.Button):
         modal = DenyReasonModal(
             self.config, self.bot, self.slug, self.user_id,
-            self.guild_id, interaction.channel, interaction.message
+            self.guild_id, interaction.channel
         )
         await interaction.response.send_modal(modal)
 
 
 class EditTicketCategoriesModal(discord.ui.Modal, title="Edit Ticket Categories"):
     categories = discord.ui.TextInput(
-        label="Categories (one per line, up to 20)",
+        label="Categories (one per line)",
         style=discord.TextStyle.paragraph,
         placeholder="Bug Report\nPayment Issue\nGeneral Question",
-        max_length=1000,
+        max_length=500,
     )
 
     async def on_submit(self, interaction: discord.Interaction):
-        cats = [c.strip() for c in self.categories.value.splitlines() if c.strip()][:20]
+        cats = [c.strip() for c in self.categories.value.splitlines() if c.strip()]
         await interaction.client.cogs["Forms"].config.guild(interaction.guild).ticket_categories.set(cats)
         await interaction.response.send_message(
             f"✅ Categories updated: {', '.join(cats)}", ephemeral=True
@@ -925,24 +725,6 @@ class ConfirmView(discord.ui.View):
         self.stop()
 
 
-class _ForumSelectStepView(discord.ui.View):
-    """Single forum channel select step."""
-
-    def __init__(self):
-        super().__init__(timeout=120)
-        self.selected_forum = None
-
-    @discord.ui.select(
-        cls=discord.ui.ChannelSelect,
-        placeholder="Select a forum channel…",
-        channel_types=[discord.ChannelType.forum],
-    )
-    async def channel_select(self, interaction: discord.Interaction, select: discord.ui.ChannelSelect):
-        self.selected_forum = interaction.guild.get_channel(select.values[0].id)
-        await interaction.response.defer()
-        self.stop()
-
-
 class _ChannelSelectStepView(discord.ui.View):
     """Single channel select step used during application assignment."""
 
@@ -956,32 +738,7 @@ class _ChannelSelectStepView(discord.ui.View):
         channel_types=[discord.ChannelType.text],
     )
     async def channel_select(self, interaction: discord.Interaction, select: discord.ui.ChannelSelect):
-        # Resolve AppCommandChannel to a full TextChannel
-        self.selected_channel = interaction.guild.get_channel(select.values[0].id)
-        await interaction.response.defer()
-        self.stop()
-
-
-class _MultiRoleSelectStepView(discord.ui.View):
-    """Multi-select role step with a Skip button."""
-
-    def __init__(self, placeholder: str = "Select roles…"):
-        super().__init__(timeout=120)
-        self.selected_role_ids: list = []
-
-    @discord.ui.select(
-        cls=discord.ui.RoleSelect,
-        placeholder="Select roles…",
-        min_values=0,
-        max_values=10,
-    )
-    async def role_select(self, interaction: discord.Interaction, select: discord.ui.RoleSelect):
-        self.selected_role_ids = [r.id for r in select.values]
-        await interaction.response.defer()
-        self.stop()
-
-    @discord.ui.button(label="Skip", style=discord.ButtonStyle.grey)
-    async def skip(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.selected_channel = select.values[0]
         await interaction.response.defer()
         self.stop()
 
@@ -1045,28 +802,15 @@ class _OpenModalView(discord.ui.View):
 
 class ApplicationSettingsView(discord.ui.View):
     def __init__(self, config: Config, bot):
-        super().__init__(timeout=None)
+        super().__init__(timeout=180)
         self.config = config
         self.bot = bot
 
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        staff_role_id = await self.config.guild(interaction.guild).ticket_staff_role()
-        is_admin = interaction.user.guild_permissions.administrator
-        has_staff = staff_role_id and any(r.id == staff_role_id for r in interaction.user.roles)
-        if not is_admin and not has_staff:
-            await interaction.response.send_message(
-                "You don't have permission to use this.", ephemeral=True
-            )
-            return False
-        return True
-
-    @discord.ui.button(label="➕ Create Application", style=discord.ButtonStyle.green, custom_id="forms:appmgmt:create")
+    @discord.ui.button(label="➕ Create Application", style=discord.ButtonStyle.green)
     async def create_app(self, interaction: discord.Interaction, button: discord.ui.Button):
         modal = CreateApplicationModal()
         await interaction.response.send_modal(modal)
         await modal.wait()
-        if not hasattr(modal, "result_name"):
-            return  # Modal dismissed without submitting
         from redbot.core.data_manager import cog_data_path
         from .applications import ApplicationManager
         manager = ApplicationManager(self.bot, self.config, cog_data_path(self.bot.cogs["Forms"]))
@@ -1081,7 +825,7 @@ class ApplicationSettingsView(discord.ui.View):
             interaction.user, modal.result_name, modal.result_description
         )
 
-    @discord.ui.button(label="✏️ Edit Application", style=discord.ButtonStyle.blurple, custom_id="forms:appmgmt:edit")
+    @discord.ui.button(label="✏️ Edit Application", style=discord.ButtonStyle.blurple)
     async def edit_app(self, interaction: discord.Interaction, button: discord.ui.Button):
         from redbot.core.data_manager import cog_data_path
         from .applications import ApplicationManager
@@ -1097,7 +841,7 @@ class ApplicationSettingsView(discord.ui.View):
         if view.selected:
             await manager.edit_application(interaction.user, view.selected)
 
-    @discord.ui.button(label="🗑️ Delete Application", style=discord.ButtonStyle.red, custom_id="forms:appmgmt:delete")
+    @discord.ui.button(label="🗑️ Delete Application", style=discord.ButtonStyle.red)
     async def delete_app(self, interaction: discord.Interaction, button: discord.ui.Button):
         from redbot.core.data_manager import cog_data_path
         from .applications import ApplicationManager
@@ -1124,7 +868,7 @@ class ApplicationSettingsView(discord.ui.View):
                 await self.config.guild(interaction.guild).application_assignments.set(assignments)
                 await interaction.followup.send("✅ Application deleted.", ephemeral=True)
 
-    @discord.ui.button(label="📌 Assign to Channel", style=discord.ButtonStyle.grey, custom_id="forms:appmgmt:assign")
+    @discord.ui.button(label="📌 Assign to Channel", style=discord.ButtonStyle.grey)
     async def assign_app(self, interaction: discord.Interaction, button: discord.ui.Button):
         from redbot.core.data_manager import cog_data_path
         from .applications import ApplicationManager
@@ -1136,7 +880,7 @@ class ApplicationSettingsView(discord.ui.View):
         options = [discord.SelectOption(label=a["name"], value=slug) for slug, a in apps.items()]
         view = _SingleSelectView(options, placeholder="Select application to assign…")
         await interaction.response.send_message(
-            "**Step 1 of 5:** Which application do you want to assign to a channel?",
+            "**Step 1 of 3:** Which application do you want to assign to a channel?",
             view=view,
             ephemeral=True,
         )
@@ -1149,7 +893,7 @@ class ApplicationSettingsView(discord.ui.View):
         # Step 2: pick channel
         channel_view = _ChannelSelectStepView()
         await interaction.followup.send(
-            f"**Step 2 of 5:** Select the channel where the **{app['name']}** Apply button will be posted.",
+            f"**Step 2 of 3:** Select the channel where the **{app['name']}** Apply button will be posted.",
             view=channel_view,
             ephemeral=True,
         )
@@ -1157,32 +901,14 @@ class ApplicationSettingsView(discord.ui.View):
         if not channel_view.selected_channel:
             return
 
-        # Step 3: pick which roles can click Apply (optional)
-        allowed_view = _MultiRoleSelectStepView()
-        await interaction.followup.send(
-            "**Step 3 of 5:** Select roles that are **allowed to apply** (skip = anyone can apply).",
-            view=allowed_view,
-            ephemeral=True,
-        )
-        await allowed_view.wait()
-
-        # Step 4: pick approval role (role to grant)
+        # Step 3: pick approval role
         role_view = _RoleSelectStepView()
         await interaction.followup.send(
-            "**Step 4 of 5:** Select the role to **grant** on approval (or skip for none).",
+            "**Step 3 of 3:** Select the role to grant on approval (or skip to set no auto-role).",
             view=role_view,
             ephemeral=True,
         )
         await role_view.wait()
-
-        # Step 5: pick roles to remove on approval
-        removal_view = _MultiRoleSelectStepView()
-        await interaction.followup.send(
-            "**Step 5 of 5:** Select roles to **remove** on approval (skip for none).",
-            view=removal_view,
-            ephemeral=True,
-        )
-        await removal_view.wait()
 
         # Cooldown modal
         cooldown_modal = _CooldownModal()
@@ -1203,43 +929,12 @@ class ApplicationSettingsView(discord.ui.View):
             description=app["description"],
             channel=channel_view.selected_channel,
             approval_role_id=approval_role_id,
-            removal_role_ids=removal_view.selected_role_ids,
-            allowed_role_ids=allowed_view.selected_role_ids,
             cooldown_days=cooldown_days,
         )
         await interaction.followup.send(
             f"✅ **{app['name']}** has been assigned to {channel_view.selected_channel.mention}!",
             ephemeral=True,
         )
-
-    @discord.ui.button(label="📁 Set Application Forum", style=discord.ButtonStyle.grey, custom_id="forms:appmgmt:forum")
-    async def set_app_forum(self, interaction: discord.Interaction, button: discord.ui.Button):
-        view = _ForumSelectStepView()
-        await interaction.response.send_message(
-            "Select the **forum channel** where application reviews will be posted:",
-            view=view,
-            ephemeral=True,
-        )
-        await view.wait()
-        if not view.selected_forum:
-            return
-        forum = view.selected_forum
-        if not isinstance(forum, discord.ForumChannel):
-            await interaction.followup.send("That doesn't appear to be a forum channel.", ephemeral=True)
-            return
-        await self.config.guild(interaction.guild).application_forum.set(forum.id)
-        tag_ok = await _ensure_application_forum_tags(forum, self.config, interaction.guild.id)
-        if tag_ok:
-            msg = f"✅ Application forum set to {forum.mention}. APPLICATION tag created/confirmed."
-        else:
-            msg = (
-                f"✅ Application forum set to {forum.mention}.\n"
-                "⚠️ Could not create the **APPLICATION** tag automatically — the bot needs "
-                "**Manage Channels** permission on that forum. Create the tag manually or grant "
-                "the permission and re-save."
-            )
-        await interaction.followup.send(msg, ephemeral=True)
-
 
 
 class SettingsPanelView(discord.ui.View):

@@ -9,25 +9,6 @@ from redbot.core.bot import Red
 from pathlib import Path
 
 
-async def _get_or_create_tags(
-    forum: "discord.ForumChannel", names: list
-) -> list:
-    """Return ForumTag objects for each name, creating missing ones if possible."""
-    existing = {t.name: t for t in forum.available_tags}
-    tags = []
-    for name in names:
-        if name in existing:
-            tags.append(existing[name])
-        else:
-            try:
-                tag = await forum.create_tag(name=name)
-                tags.append(tag)
-                existing[name] = tag
-            except Exception:
-                pass
-    return tags
-
-
 class ApplicationManager:
     def __init__(self, bot: Red, config: Config, data_path: Path) -> None:
         self.bot = bot
@@ -198,8 +179,6 @@ class ApplicationManager:
         description: str,
         channel: discord.TextChannel,
         approval_role_id: int,
-        removal_role_ids: list,
-        allowed_role_ids: list,
         cooldown_days: int,
     ) -> discord.Message:
         """Post the application embed in a channel and save the assignment to config."""
@@ -220,8 +199,6 @@ class ApplicationManager:
             "channel_id": channel.id,
             "panel_message_id": msg.id,
             "approval_role_id": approval_role_id,
-            "removal_role_ids": removal_role_ids,
-            "allowed_role_ids": allowed_role_ids,
             "cooldown_days": cooldown_days,
             "active_reviews": {},
         }
@@ -305,8 +282,8 @@ class ApplicationManager:
         from .views import ReviewView
 
         guild_conf = self.config.guild(guild)
-        # Use dedicated application forum if configured, fall back to ticket forum
-        forum_id = await guild_conf.application_forum() or await guild_conf.ticket_forum()
+        forum_id = await guild_conf.ticket_forum()
+        app_tag_id = await guild_conf.application_tag_id()
 
         forum = guild.get_channel(forum_id) if forum_id else None
         if not forum or not isinstance(forum, discord.ForumChannel):
@@ -320,10 +297,11 @@ class ApplicationManager:
             lines.append("")
         transcript = "\n".join(lines)
 
-        tags = await _get_or_create_tags(forum, ["OPEN", app["name"]])
+        tags = [t for t in forum.available_tags if t.id == app_tag_id]
         view = ReviewView(self.config, self.bot, app["slug"], user.id, guild.id)
 
-        content = transcript[:4000] if len(transcript) <= 4000 else transcript[:4000] + "\n…(see attachment)"
+        suffix = "\n…(see attachment)"
+        content = transcript if len(transcript) <= 2000 else transcript[:2000 - len(suffix)] + suffix
         thread, first_msg = await forum.create_thread(
             name=f"{app['name']} — {user.name}",
             content=content,
@@ -332,7 +310,7 @@ class ApplicationManager:
         )
 
         # If transcript too long, attach full file
-        if len(transcript) > 4000:
+        if len(transcript) > 2000:
             fp = io.BytesIO(transcript.encode("utf-8"))
             await thread.send(file=discord.File(fp, filename=f"{app['slug']}-{user.name}.txt"))
 
