@@ -559,6 +559,7 @@ class DenyReasonModal(discord.ui.Modal, title="Denial Reason"):
             await self.config.guild(guild).application_assignments.set(assignments)
 
         # Close forum thread
+        await self.thread.send(f"❌ **Denied** by {interaction.user.mention} — **Reason:** {self.reason.value}")
         await self.thread.edit(archived=True, locked=True)
         await interaction.response.send_message(
             "❌ Application denied. User has been notified.", ephemeral=True
@@ -613,6 +614,7 @@ class ReviewView(discord.ui.View):
         # Clean up
         assignments[self.slug]["active_reviews"].pop(str(self.user_id), None)
         await self.config.guild(guild).application_assignments.set(assignments)
+        await interaction.channel.send(f"✅ **Approved** by {interaction.user.mention}")
         await interaction.channel.edit(archived=True, locked=True)
         await interaction.response.send_message(
             "✅ Application approved. User notified.", ephemeral=True
