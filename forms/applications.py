@@ -300,7 +300,8 @@ class ApplicationManager:
         tags = [t for t in forum.available_tags if t.id == app_tag_id]
         view = ReviewView(self.config, self.bot, app["slug"], user.id, guild.id)
 
-        content = transcript[:4000] if len(transcript) <= 4000 else transcript[:4000] + "\n…(see attachment)"
+        suffix = "\n…(see attachment)"
+        content = transcript if len(transcript) <= 2000 else transcript[:2000 - len(suffix)] + suffix
         thread, first_msg = await forum.create_thread(
             name=f"{app['name']} — {user.name}",
             content=content,
@@ -309,7 +310,7 @@ class ApplicationManager:
         )
 
         # If transcript too long, attach full file
-        if len(transcript) > 4000:
+        if len(transcript) > 2000:
             fp = io.BytesIO(transcript.encode("utf-8"))
             await thread.send(file=discord.File(fp, filename=f"{app['slug']}-{user.name}.txt"))
 
