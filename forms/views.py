@@ -66,32 +66,6 @@ class WizardStep2View(_WizardStepView):
             return
         await self.config.guild_from_id(self.guild_id).ticket_category.set(self._selected.id)
         self.stop()
-        await _send_wizard_step3(interaction, self.config, self.guild_id, self.bot)
-
-    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.red)
-    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
-        self.stop()
-        await interaction.response.edit_message(content="❌ Setup cancelled.", view=None, embed=None)
-
-
-class WizardStep3View(_WizardStepView):
-    """Step 3: Select ticket user role."""
-
-    @discord.ui.select(
-        cls=discord.ui.RoleSelect,
-        placeholder="Select the ticket user role…",
-    )
-    async def role_select(self, interaction: discord.Interaction, select: discord.ui.RoleSelect):
-        self._selected = select.values[0]
-        await interaction.response.defer()
-
-    @discord.ui.button(label="Confirm", style=discord.ButtonStyle.green)
-    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if self._selected is None:
-            await interaction.response.send_message("Please select a role first.", ephemeral=True)
-            return
-        await self.config.guild_from_id(self.guild_id).ticket_user_role.set(self._selected.id)
-        self.stop()
         await _send_wizard_step4(interaction, self.config, self.guild_id, self.bot)
 
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.red)
@@ -100,8 +74,9 @@ class WizardStep3View(_WizardStepView):
         await interaction.response.edit_message(content="❌ Setup cancelled.", view=None, embed=None)
 
 
+
 class WizardStep4View(_WizardStepView):
-    """Step 4: Select ticket staff role."""
+    """Step 3: Select ticket staff role."""
 
     @discord.ui.select(
         cls=discord.ui.RoleSelect,
@@ -127,7 +102,7 @@ class WizardStep4View(_WizardStepView):
 
 
 class WizardStep5View(_WizardStepView):
-    """Step 5: Select staff forum channel."""
+    """Step 4: Select ticket forum channel."""
 
     @discord.ui.select(
         cls=discord.ui.ChannelSelect,
@@ -145,7 +120,11 @@ class WizardStep5View(_WizardStepView):
             return
         await self.config.guild_from_id(self.guild_id).ticket_forum.set(self._selected.id)
         self.stop()
-        await _send_wizard_step6(interaction, self.config, self.guild_id, self.bot, self._selected)
+        # ChannelSelect returns AppCommandChannel, not a real ForumChannel — resolve it
+        resolved = interaction.guild.get_channel(self._selected.id)
+        if resolved and isinstance(resolved, discord.ForumChannel):
+            await _ensure_forum_tags(resolved, self.config, self.guild_id)
+        await _send_wizard_app_forum(interaction, self.config, self.guild_id, self.bot)
 
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.red)
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -193,7 +172,7 @@ class TicketCategoriesModal(discord.ui.Modal, title="Ticket Categories"):
 
 
 class WizardStep7View(_WizardStepView):
-    """Step 7: Enter ticket categories via modal."""
+    """Step 6: Enter ticket categories via modal."""
 
     @discord.ui.button(label="Enter Categories", style=discord.ButtonStyle.blurple)
     async def enter_categories(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -208,29 +187,17 @@ class WizardStep7View(_WizardStepView):
 
 
 async def _ensure_forum_tags(forum: discord.ForumChannel, config: Config, guild_id: int) -> None:
-    """Create TICKET and APPLICATION tags if they don't exist; store IDs in config."""
+    """Create TICKET tag in the ticket forum if it doesn't exist; store ID in config."""
     existing = {t.name: t for t in forum.available_tags}
     ticket_tag = existing.get("TICKET") or await forum.create_tag(name="TICKET")
-    app_tag = existing.get("APPLICATION") or await forum.create_tag(name="APPLICATION")
     await config.guild_from_id(guild_id).ticket_tag_id.set(ticket_tag.id)
-    await config.guild_from_id(guild_id).application_tag_id.set(app_tag.id)
 
 
 async def _send_wizard_step2(interaction: discord.Interaction, config: Config, guild_id: int, bot) -> None:
     view = WizardStep2View(config, guild_id, bot)
     embed = discord.Embed(
-        title="Forms Setup — Step 2 of 7",
+        title="Forms Setup — Step 2 of 6",
         description="Select the **category** where ticket channels will be created.",
-        color=discord.Color.blurple(),
-    )
-    await interaction.response.edit_message(embed=embed, view=view)
-
-
-async def _send_wizard_step3(interaction: discord.Interaction, config: Config, guild_id: int, bot) -> None:
-    view = WizardStep3View(config, guild_id, bot)
-    embed = discord.Embed(
-        title="Forms Setup — Step 3 of 7",
-        description="Select the **ticket user role** that members need to open tickets.",
         color=discord.Color.blurple(),
     )
     await interaction.response.edit_message(embed=embed, view=view)
@@ -239,7 +206,7 @@ async def _send_wizard_step3(interaction: discord.Interaction, config: Config, g
 async def _send_wizard_step4(interaction: discord.Interaction, config: Config, guild_id: int, bot) -> None:
     view = WizardStep4View(config, guild_id, bot)
     embed = discord.Embed(
-        title="Forms Setup — Step 4 of 7",
+        title="Forms Setup — Step 3 of 6",
         description="Select the **staff role** that can manage and close tickets.",
         color=discord.Color.blurple(),
     )
@@ -249,31 +216,41 @@ async def _send_wizard_step4(interaction: discord.Interaction, config: Config, g
 async def _send_wizard_step5(interaction: discord.Interaction, config: Config, guild_id: int, bot) -> None:
     view = WizardStep5View(config, guild_id, bot)
     embed = discord.Embed(
-        title="Forms Setup — Step 5 of 7",
-        description="Select the **forum channel** where ticket and application transcripts will be archived.",
+        title="Forms Setup — Step 4 of 6",
+        description="Select the **forum channel** where closed ticket transcripts will be archived.",
         color=discord.Color.blurple(),
     )
     await interaction.response.edit_message(embed=embed, view=view)
 
 
-async def _send_wizard_step6(
-    interaction: discord.Interaction, config: Config, guild_id: int, bot, forum: discord.ForumChannel
-) -> None:
-    await _ensure_forum_tags(forum, config, guild_id)
+async def _send_wizard_app_forum(interaction: discord.Interaction, config: Config, guild_id: int, bot) -> None:
+    view = WizardAppForumView(config, guild_id, bot)
     embed = discord.Embed(
-        title="Forms Setup — Step 6 of 7",
-        description="✅ Forum tags created: **TICKET** and **APPLICATION**.\n\nClick **Next** to set up ticket categories.",
-        color=discord.Color.green(),
+        title="Forms Setup — Step 5 of 6",
+        description="Select the **forum channel** where application reviews will be posted for staff to approve or deny.",
+        color=discord.Color.blurple(),
     )
-    view = _Step6NextView(config, guild_id, bot)
     await interaction.response.edit_message(embed=embed, view=view)
 
 
-class _Step6NextView(_WizardStepView):
-    """Step 6 confirmation — just a Next button."""
+class WizardAppForumView(_WizardStepView):
+    """Step 5: Select application review forum channel."""
 
-    @discord.ui.button(label="Next", style=discord.ButtonStyle.green)
-    async def next_step(self, interaction: discord.Interaction, button: discord.ui.Button):
+    @discord.ui.select(
+        cls=discord.ui.ChannelSelect,
+        placeholder="Select the application review forum channel…",
+        channel_types=[discord.ChannelType.forum],
+    )
+    async def channel_select(self, interaction: discord.Interaction, select: discord.ui.ChannelSelect):
+        self._selected = select.values[0]
+        await interaction.response.defer()
+
+    @discord.ui.button(label="Confirm", style=discord.ButtonStyle.green)
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self._selected is None:
+            await interaction.response.send_message("Please select a forum first.", ephemeral=True)
+            return
+        await self.config.guild_from_id(self.guild_id).application_forum.set(self._selected.id)
         self.stop()
         await _send_wizard_step7(interaction, self.config, self.guild_id, self.bot)
 
@@ -286,7 +263,7 @@ class _Step6NextView(_WizardStepView):
 async def _send_wizard_step7(interaction: discord.Interaction, config: Config, guild_id: int, bot) -> None:
     view = WizardStep7View(config, guild_id, bot)
     embed = discord.Embed(
-        title="Forms Setup — Step 7 of 7",
+        title="Forms Setup — Step 6 of 6",
         description=(
             "Click **Enter Categories** to open a form where you can name up to 5 ticket categories "
             "and set the max open tickets per user (default: 3)."
@@ -335,14 +312,6 @@ class TicketPanelView(discord.ui.View):
     )
     async def open_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
         guild_conf = self.config.guild(interaction.guild)
-
-        # Role gate
-        user_role_id = await guild_conf.ticket_user_role()
-        if user_role_id and not any(r.id == user_role_id for r in interaction.user.roles):
-            await interaction.response.send_message(
-                "You don't have permission to open tickets.", ephemeral=True
-            )
-            return
 
         # Category guard
         categories = await guild_conf.ticket_categories()
@@ -531,14 +500,16 @@ class DenyReasonModal(discord.ui.Modal, title="Denial Reason"):
 
     async def on_submit(self, interaction: discord.Interaction):
         import time
+        await interaction.response.defer(ephemeral=True)
         guild = interaction.guild
         user = guild.get_member(self.user_id) or await self.bot.fetch_user(self.user_id)
 
+        assignments = await self.config.guild(guild).application_assignments()
+        app_conf = assignments.get(self.slug, {})
+        cooldown_days = app_conf.get("cooldown_days", 7)
+
         # DM the denial reason
         try:
-            assignments = await self.config.guild(guild).application_assignments()
-            app_conf = assignments.get(self.slug, {})
-            cooldown_days = app_conf.get("cooldown_days", 7)
             await user.send(
                 f"Your **{self.slug.replace('-', ' ').title()}** application was not approved.\n\n"
                 f"**Reason:** {self.reason.value}"
@@ -553,7 +524,6 @@ class DenyReasonModal(discord.ui.Modal, title="Denial Reason"):
         await self.config.user(user).application_cooldowns.set(cooldowns)
 
         # Clean up active_reviews
-        assignments = await self.config.guild(guild).application_assignments()
         if self.slug in assignments:
             assignments[self.slug]["active_reviews"].pop(str(self.user_id), None)
             await self.config.guild(guild).application_assignments.set(assignments)
@@ -561,9 +531,7 @@ class DenyReasonModal(discord.ui.Modal, title="Denial Reason"):
         # Close forum thread
         await self.thread.send(f"❌ **Denied** by {interaction.user.mention} — **Reason:** {self.reason.value}")
         await self.thread.edit(archived=True, locked=True)
-        await interaction.response.send_message(
-            "❌ Application denied. User has been notified.", ephemeral=True
-        )
+        await interaction.followup.send("❌ Application denied. User has been notified.", ephemeral=True)
 
 
 class ReviewView(discord.ui.View):
@@ -585,6 +553,7 @@ class ReviewView(discord.ui.View):
         label="✅ Approve", style=discord.ButtonStyle.green, custom_id="forms:approve:_"
     )
     async def approve(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
         guild = interaction.guild
         assignments = await self.config.guild(guild).application_assignments()
         app_conf = assignments.get(self.slug, {})
@@ -616,9 +585,7 @@ class ReviewView(discord.ui.View):
         await self.config.guild(guild).application_assignments.set(assignments)
         await interaction.channel.send(f"✅ **Approved** by {interaction.user.mention}")
         await interaction.channel.edit(archived=True, locked=True)
-        await interaction.response.send_message(
-            "✅ Application approved. User notified.", ephemeral=True
-        )
+        await interaction.followup.send("✅ Application approved. User notified.", ephemeral=True)
 
     @discord.ui.button(
         label="❌ Deny", style=discord.ButtonStyle.red, custom_id="forms:deny:_"
@@ -902,6 +869,10 @@ class ApplicationSettingsView(discord.ui.View):
         await channel_view.wait()
         if not channel_view.selected_channel:
             return
+        actual_channel = interaction.guild.get_channel(channel_view.selected_channel.id)
+        if not actual_channel:
+            await interaction.followup.send("Could not find the selected channel.", ephemeral=True)
+            return
 
         # Step 3: pick approval role
         role_view = _RoleSelectStepView()
@@ -929,12 +900,12 @@ class ApplicationSettingsView(discord.ui.View):
             slug=slug,
             name=app["name"],
             description=app["description"],
-            channel=channel_view.selected_channel,
+            channel=actual_channel,
             approval_role_id=approval_role_id,
             cooldown_days=cooldown_days,
         )
         await interaction.followup.send(
-            f"✅ **{app['name']}** has been assigned to {channel_view.selected_channel.mention}!",
+            f"✅ **{app['name']}** has been assigned to {actual_channel.mention}!",
             ephemeral=True,
         )
 

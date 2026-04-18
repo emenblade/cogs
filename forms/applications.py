@@ -7,6 +7,13 @@ import discord
 from redbot.core import Config
 from redbot.core.bot import Red
 from pathlib import Path
+from .utils import parse_question
+
+
+_MIN_RULE_HINT = (
+    "💡 *Optional:* append `[min:50]` for a 50-character minimum or `[min:3w]` for a 3-word minimum "
+    "— e.g. `Describe your experience. [min:100]` — leave it out if you don't need one."
+)
 
 
 class ApplicationManager:
@@ -55,7 +62,7 @@ class ApplicationManager:
             await dm.send(
                 f"👋 Let's build **{name}**!\n\n"
                 "What is **question 1**? Reply `done` at any time when you're finished. "
-                "(You can add up to 50 questions.)"
+                f"(You can add up to 50 questions.)\n\n{_MIN_RULE_HINT}"
             )
         except discord.Forbidden:
             return
@@ -96,11 +103,16 @@ class ApplicationManager:
 
             questions.append(reply.content.strip())
             remaining = 50 - len(questions)
-            await dm.send(
-                f"✅ Question {len(questions)} saved.\n\n"
-                f"What is **question {len(questions)+1}**? "
-                f"({remaining} remaining, reply `done` when finished.)"
-            )
+            if remaining > 0:
+                await dm.send(
+                    f"✅ Question {len(questions)} saved.\n\n"
+                    f"What is **question {len(questions)+1}**? "
+                    f"({remaining} remaining, reply `done` when finished.)\n\n{_MIN_RULE_HINT}"
+                )
+            else:
+                await dm.send(
+                    f"✅ Question {len(questions)} saved. You've reached the 50-question limit."
+                )
 
         return questions
 
@@ -114,9 +126,15 @@ class ApplicationManager:
             return m.author.id == member.id and m.channel.id == dm.id
 
         for i, q in enumerate(existing_questions):
+            display_q, rule = parse_question(q)
+            rule_note = ""
+            if rule:
+                rule_note = (
+                    f"\n*Current rule:* minimum **{rule['min']} {rule['type']}**"
+                )
             await dm.send(
-                f"**Question {i+1} is currently:**\n> {q}\n\n"
-                "Reply with new text to replace it, or reply `keep` to leave it unchanged."
+                f"**Question {i+1} is currently:**\n> {display_q}{rule_note}\n\n"
+                f"Reply with new text to replace it, or reply `keep` to leave it unchanged.\n\n{_MIN_RULE_HINT}"
             )
             try:
                 reply = await self.bot.wait_for("message", check=check, timeout=300)
@@ -228,9 +246,10 @@ class ApplicationManager:
         await self.config.user(user).active_application.set(state)
 
         total = len(app["questions"])
+        first_q, _ = parse_question(app["questions"][0])
         await dm.send(
             f"👋 Welcome to the **{app['name']}** application! ({total} question(s))\n\n"
-            f"**Question 1 of {total}:** {app['questions'][0]}"
+            f"**Question 1 of {total}:** {first_q}"
         )
 
     async def _handle_application_reply(
@@ -246,13 +265,36 @@ class ApplicationManager:
         if not app:
             return
 
+        questions = app["questions"]
+        total = len(questions)
+        answer = message.content.strip()
+
+        # Validate minimum length rule if one is set on this question
+        current_q = questions[state["question_index"]]
+        _, rule = parse_question(current_q)
+        if rule:
+            if rule["type"] == "chars":
+                count = len(answer)
+                if count < rule["min"]:
+                    await message.channel.send(
+                        f"⚠️ Your answer is too short ({count} character{'s' if count != 1 else ''}). "
+                        f"This question requires at least **{rule['min']} characters**. Please try again."
+                    )
+                    return
+            elif rule["type"] == "words":
+                count = len(answer.split())
+                if count < rule["min"]:
+                    await message.channel.send(
+                        f"⚠️ Your answer is too short ({count} word{'s' if count != 1 else ''}). "
+                        f"This question requires at least **{rule['min']} words**. Please try again."
+                    )
+                    return
+
         new_state = {
             **state,
             "question_index": state["question_index"] + 1,
-            "answers": state["answers"] + [message.content.strip()],
+            "answers": state["answers"] + [answer],
         }
-        questions = app["questions"]
-        total = len(questions)
 
         if new_state["question_index"] >= total:
             # All questions answered — submit
@@ -265,9 +307,9 @@ class ApplicationManager:
         else:
             # Save progress and send next question
             await self.config.user(member).active_application.set(new_state)
-            next_q = questions[new_state["question_index"]]
+            next_display, _ = parse_question(questions[new_state["question_index"]])
             await message.channel.send(
-                f"**Question {new_state['question_index'] + 1} of {total}:** {next_q}"
+                f"**Question {new_state['question_index'] + 1} of {total}:** {next_display}"
             )
 
     async def _post_review_forum(
@@ -282,8 +324,7 @@ class ApplicationManager:
         from .views import ReviewView
 
         guild_conf = self.config.guild(guild)
-        forum_id = await guild_conf.ticket_forum()
-        app_tag_id = await guild_conf.application_tag_id()
+        forum_id = await guild_conf.application_forum()
 
         forum = guild.get_channel(forum_id) if forum_id else None
         if not forum or not isinstance(forum, discord.ForumChannel):
@@ -292,12 +333,13 @@ class ApplicationManager:
         # Build Q&A transcript
         lines = [f"**Application: {app['name']}**", f"Applicant: {user.mention} ({user.name})", ""]
         for i, (q, a) in enumerate(zip(app["questions"], answers), 1):
-            lines.append(f"**Q{i}: {q}**")
+            display_q, _ = parse_question(q)
+            lines.append(f"**Q{i}: {display_q}**")
             lines.append(f"A: {a}")
             lines.append("")
         transcript = "\n".join(lines)
 
-        tags = [t for t in forum.available_tags if t.id == app_tag_id]
+        tags = []
         view = ReviewView(self.config, self.bot, app["slug"], user.id, guild.id)
 
         suffix = "\n…(see attachment)"

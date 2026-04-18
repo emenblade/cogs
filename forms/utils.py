@@ -4,6 +4,22 @@ import io
 import re
 import discord
 
+_MIN_RULE_RE = re.compile(r'\s*\[min:(\d+)(w?)\]\s*$', re.IGNORECASE)
+
+
+def parse_question(text: str) -> tuple[str, dict | None]:
+    """Strip an optional [min:N] or [min:Nw] rule tag from the end of a question.
+
+    Returns (display_text, rule) where rule is None or
+    {"type": "chars" | "words", "min": int}.
+    """
+    m = _MIN_RULE_RE.search(text)
+    if not m:
+        return text.strip(), None
+    rule_type = "words" if m.group(2).lower() == "w" else "chars"
+    display = text[:m.start()].strip()
+    return display, {"type": rule_type, "min": int(m.group(1))}
+
 
 def sanitize_channel_name(name: str) -> str:
     """Return a Discord-safe channel name (lowercase, hyphens, max 80 chars)."""
