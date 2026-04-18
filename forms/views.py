@@ -467,6 +467,19 @@ class ApplyView(discord.ui.View):
             )
             return
 
+        # Check: required role?
+        required_role_id = app_conf.get("required_role_id")
+        if required_role_id:
+            member_roles = getattr(interaction.user, "roles", [])
+            if not any(r.id == required_role_id for r in member_roles):
+                role = interaction.guild.get_role(required_role_id)
+                role_name = role.name if role else "a required role"
+                await interaction.response.send_message(
+                    f"You need the **{role_name}** role to apply for this.",
+                    ephemeral=True,
+                )
+                return
+
         # Check: on cooldown?
         cooldowns = await self.config.user(interaction.user).application_cooldowns()
         expiry = cooldowns.get(self.slug)
@@ -821,6 +834,28 @@ class _RoleSelectStepView(discord.ui.View):
         self.stop()
 
 
+class _RequiredRoleSelectStepView(discord.ui.View):
+    """Single role select step for choosing a role applicants must already have."""
+
+    def __init__(self):
+        super().__init__(timeout=120)
+        self.selected_role_id = None
+
+    @discord.ui.select(
+        cls=discord.ui.RoleSelect,
+        placeholder="Select required role… (optional)",
+    )
+    async def role_select(self, interaction: discord.Interaction, select: discord.ui.RoleSelect):
+        self.selected_role_id = select.values[0].id if select.values else None
+        await interaction.response.defer()
+        self.stop()
+
+    @discord.ui.button(label="Skip (no requirement)", style=discord.ButtonStyle.grey)
+    async def skip(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
+        self.stop()
+
+
 class _RemoveRoleSelectStepView(discord.ui.View):
     """Single role select step for choosing a role to remove on approval."""
 
@@ -923,7 +958,7 @@ class ApplicationSettingsView(discord.ui.View):
         options = [discord.SelectOption(label=a["name"], value=slug) for slug, a in apps.items()]
         view = _SingleSelectView(options, placeholder="Select application to assign…")
         await interaction.response.send_message(
-            "**Step 1 of 4:** Which application do you want to assign to a channel?",
+            "**Step 1 of 5:** Which application do you want to assign to a channel?",
             view=view,
             ephemeral=True,
         )
@@ -936,7 +971,7 @@ class ApplicationSettingsView(discord.ui.View):
         # Step 2: pick channel
         channel_view = _ChannelSelectStepView()
         await interaction.followup.send(
-            f"**Step 2 of 4:** Select the channel where the **{app['name']}** Apply button will be posted.",
+            f"**Step 2 of 5:** Select the channel where the **{app['name']}** Apply button will be posted.",
             view=channel_view,
             ephemeral=True,
         )
@@ -951,7 +986,7 @@ class ApplicationSettingsView(discord.ui.View):
         # Step 3: pick approval role
         role_view = _RoleSelectStepView()
         await interaction.followup.send(
-            "**Step 3 of 4:** Select the role to **grant** on approval (or skip for none).",
+            "**Step 3 of 5:** Select the role to **grant** on approval (or skip for none).",
             view=role_view,
             ephemeral=True,
         )
@@ -960,11 +995,20 @@ class ApplicationSettingsView(discord.ui.View):
         # Step 4: pick removal role
         remove_role_view = _RemoveRoleSelectStepView()
         await interaction.followup.send(
-            "**Step 4 of 4:** Select the role to **remove** on approval (or skip for none).",
+            "**Step 4 of 5:** Select the role to **remove** on approval (or skip for none).",
             view=remove_role_view,
             ephemeral=True,
         )
         await remove_role_view.wait()
+
+        # Step 5: pick required role
+        required_role_view = _RequiredRoleSelectStepView()
+        await interaction.followup.send(
+            "**Step 5 of 5:** Select a role applicants **must already have** to apply (or skip for no requirement).",
+            view=required_role_view,
+            ephemeral=True,
+        )
+        await required_role_view.wait()
 
         await manager.assign_application(
             guild=interaction.guild,
@@ -974,6 +1018,7 @@ class ApplicationSettingsView(discord.ui.View):
             channel=actual_channel,
             approval_role_id=role_view.selected_role_id,
             removal_role_id=remove_role_view.selected_role_id,
+            required_role_id=required_role_view.selected_role_id,
         )
         await interaction.followup.send(
             f"✅ **{app['name']}** has been assigned to {actual_channel.mention}!",
