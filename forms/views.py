@@ -456,6 +456,17 @@ class ApplyView(discord.ui.View):
             )
             return
 
+        # Check: pending review?
+        assignments = await self.config.guild(interaction.guild).application_assignments()
+        app_conf = assignments.get(self.slug, {})
+        if str(interaction.user.id) in app_conf.get("active_reviews", {}):
+            await interaction.response.send_message(
+                "Your application is currently awaiting staff review. "
+                "Please be patient — this process can take a few days.",
+                ephemeral=True,
+            )
+            return
+
         # Check: on cooldown?
         cooldowns = await self.config.user(interaction.user).application_cooldowns()
         expiry = cooldowns.get(self.slug)
