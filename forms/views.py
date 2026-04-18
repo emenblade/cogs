@@ -133,13 +133,15 @@ class WizardStep5View(_WizardStepView):
 
 
 class TicketCategoriesModal(discord.ui.Modal, title="Ticket Categories"):
-    """Modal for entering ticket category names (up to 5)."""
+    """Modal for entering ticket category names and max open tickets."""
 
-    cat1 = discord.ui.TextInput(label="Category 1", placeholder="e.g. General Support", required=True)
-    cat2 = discord.ui.TextInput(label="Category 2", placeholder="e.g. Bug Report", required=False)
-    cat3 = discord.ui.TextInput(label="Category 3", placeholder="e.g. Billing", required=False)
-    cat4 = discord.ui.TextInput(label="Category 4", placeholder="Optional", required=False)
-    cat5 = discord.ui.TextInput(label="Category 5", placeholder="Optional", required=False)
+    categories = discord.ui.TextInput(
+        label="Categories (one per line)",
+        style=discord.TextStyle.paragraph,
+        placeholder="General Support\nBug Report\nBilling",
+        required=True,
+        max_length=500,
+    )
     max_open = discord.ui.TextInput(
         label="Max open tickets per user",
         placeholder="3",
@@ -154,28 +156,14 @@ class TicketCategoriesModal(discord.ui.Modal, title="Ticket Categories"):
         self.guild_id = guild_id
         self.bot = bot
         if existing_cats:
-            for field, value in zip(
-                [self.cat1, self.cat2, self.cat3, self.cat4, self.cat5],
-                existing_cats[:5],
-            ):
-                field.default = value
+            self.categories.default = "\n".join(existing_cats)
         if existing_max is not None:
             self.max_open.default = str(existing_max)
 
     async def on_submit(self, interaction: discord.Interaction):
-        categories = [
-            v.strip()
-            for v in [
-                self.cat1.value,
-                self.cat2.value,
-                self.cat3.value,
-                self.cat4.value,
-                self.cat5.value,
-            ]
-            if v.strip()
-        ]
+        cats = [c.strip() for c in self.categories.value.splitlines() if c.strip()]
         max_open = max(1, int(self.max_open.value)) if self.max_open.value.strip().isdigit() else 3
-        await self.config.guild_from_id(self.guild_id).ticket_categories.set(categories)
+        await self.config.guild_from_id(self.guild_id).ticket_categories.set(cats)
         await self.config.guild_from_id(self.guild_id).ticket_max_open.set(max_open)
         await finish_wizard(interaction, self.config, self.guild_id, self.bot)
 
@@ -280,8 +268,8 @@ async def _send_wizard_step7(interaction: discord.Interaction, config: Config, g
     embed = discord.Embed(
         title="Forms Setup — Step 6 of 6",
         description=(
-            "Click **Enter Categories** to open a form where you can name up to 5 ticket categories "
-            "and set the max open tickets per user (default: 3)."
+            "Click **Enter Categories** to set your ticket category names (one per line) "
+            "and the max open tickets per user."
         ),
         color=discord.Color.blurple(),
     )

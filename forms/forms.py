@@ -149,7 +149,7 @@ class Forms(commands.Cog):
         Step 3 — Staff role: the role that can close tickets and access the settings panel.
         Step 4 — Ticket forum: the forum channel where closed ticket transcripts are archived (TICKET tag created automatically).
         Step 5 — Application forum: the forum channel where application reviews are posted for staff.
-        Step 6 — Categories & limits: up to 5 ticket category names and the max number of open tickets per user.
+        Step 6 — Categories & limits: ticket category names (one per line) and the max number of open tickets per user.
 
         Once the wizard completes, the ticket panel embed is posted to the configured channel.
         Re-running setup overwrites existing settings — use `forms settings` for targeted changes.
