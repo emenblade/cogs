@@ -598,7 +598,11 @@ class ReviewView(discord.ui.View):
         assignments[self.slug]["active_reviews"].pop(str(self.user_id), None)
         await self.config.guild(guild).application_assignments.set(assignments)
         await interaction.channel.send(f"✅ **Approved** by {interaction.user.mention}")
-        await interaction.channel.edit(archived=True, locked=True)
+
+        # Replace buttons with post-decision view
+        post_view = PostReviewView(self.config, self.bot, self.slug, self.user_id, self.guild_id)
+        await interaction.message.edit(view=post_view)
+
         await interaction.followup.send("✅ Application approved. User notified.", ephemeral=True)
 
     @discord.ui.button(
@@ -610,6 +614,47 @@ class ReviewView(discord.ui.View):
             self.guild_id, interaction.channel
         )
         await interaction.response.send_modal(modal)
+
+
+class PostReviewView(discord.ui.View):
+    """Persistent view shown after an application is approved or denied."""
+
+    def __init__(self, config: Config, bot, slug: str, user_id: int, guild_id: int):
+        super().__init__(timeout=None)
+        self.config = config
+        self.bot = bot
+        self.slug = slug
+        self.user_id = user_id
+        self.guild_id = guild_id
+        if len(self.children) >= 2:
+            self.children[0].custom_id = f"forms:reset_cooldown:{slug}:{user_id}"
+            self.children[1].custom_id = f"forms:close_log:{slug}:{user_id}"
+
+    @discord.ui.button(
+        label="🔄 Reset Cooldown",
+        style=discord.ButtonStyle.blurple,
+        custom_id="forms:reset_cooldown:_",
+    )
+    async def reset_cooldown(self, interaction: discord.Interaction, button: discord.ui.Button):
+        guild = interaction.guild or self.bot.get_guild(self.guild_id)
+        user = (guild.get_member(self.user_id) if guild else None) or await self.bot.fetch_user(self.user_id)
+        cooldowns = await self.config.user(user).application_cooldowns()
+        cooldowns.pop(self.slug, None)
+        await self.config.user(user).application_cooldowns.set(cooldowns)
+        await interaction.response.defer(ephemeral=True)
+        await interaction.channel.send(
+            f"🔄 Cooldown cleared by {interaction.user.mention} — {user.mention} can re-apply immediately."
+        )
+        await interaction.followup.send("✅ Cooldown cleared.", ephemeral=True)
+
+    @discord.ui.button(
+        label="📁 Close Log",
+        style=discord.ButtonStyle.grey,
+        custom_id="forms:close_log:_",
+    )
+    async def close_log(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
+        await interaction.channel.edit(archived=True, locked=True)
 
 
 class EditTicketCategoriesModal(discord.ui.Modal, title="Edit Ticket Categories"):
