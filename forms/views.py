@@ -502,8 +502,14 @@ class DenyReasonModal(discord.ui.Modal, title="Denial Reason"):
         placeholder="Please provide a clear reason for the applicant.",
         max_length=1000,
     )
+    cooldown = discord.ui.TextInput(
+        label="Re-application cooldown (days, 0 = no cooldown)",
+        placeholder="7",
+        max_length=3,
+        required=False,
+    )
 
-    def __init__(self, config, bot, slug, user_id, guild_id, thread):
+    def __init__(self, config, bot, slug, user_id, guild_id, thread, review_message_id: int):
         super().__init__()
         self.config = config
         self.bot = bot
@@ -511,6 +517,7 @@ class DenyReasonModal(discord.ui.Modal, title="Denial Reason"):
         self.user_id = user_id
         self.guild_id = guild_id
         self.thread = thread
+        self.review_message_id = review_message_id
 
     async def on_submit(self, interaction: discord.Interaction):
         import time
@@ -518,9 +525,10 @@ class DenyReasonModal(discord.ui.Modal, title="Denial Reason"):
         guild = interaction.guild
         user = guild.get_member(self.user_id) or await self.bot.fetch_user(self.user_id)
 
-        assignments = await self.config.guild(guild).application_assignments()
-        app_conf = assignments.get(self.slug, {})
-        cooldown_days = app_conf.get("cooldown_days", 7)
+        try:
+            cooldown_days = max(0, int(self.cooldown.value or "7"))
+        except ValueError:
+            cooldown_days = 7
 
         # DM the denial reason
         try:
@@ -531,20 +539,33 @@ class DenyReasonModal(discord.ui.Modal, title="Denial Reason"):
         except discord.Forbidden:
             pass
 
-        # Set cooldown
-        expiry = time.time() + cooldown_days * 86400
-        cooldowns = await self.config.user(user).application_cooldowns()
-        cooldowns[self.slug] = expiry
-        await self.config.user(user).application_cooldowns.set(cooldowns)
+        # Set cooldown if > 0
+        if cooldown_days > 0:
+            expiry = time.time() + cooldown_days * 86400
+            cooldowns = await self.config.user(user).application_cooldowns()
+            cooldowns[self.slug] = expiry
+            await self.config.user(user).application_cooldowns.set(cooldowns)
 
         # Clean up active_reviews
+        assignments = await self.config.guild(guild).application_assignments()
         if self.slug in assignments:
             assignments[self.slug]["active_reviews"].pop(str(self.user_id), None)
             await self.config.guild(guild).application_assignments.set(assignments)
 
-        # Close forum thread
-        await self.thread.send(f"❌ **Denied** by {interaction.user.mention} — **Reason:** {self.reason.value}")
-        await self.thread.edit(archived=True, locked=True)
+        # Post denial message in thread
+        cooldown_note = f" ({cooldown_days}d cooldown)" if cooldown_days > 0 else " (no cooldown set)"
+        await self.thread.send(
+            f"❌ **Denied** by {interaction.user.mention} — **Reason:** {self.reason.value}{cooldown_note}"
+        )
+
+        # Edit original review message to replace buttons with PostReviewView
+        post_view = PostReviewView(self.config, self.bot, self.slug, self.user_id, self.guild_id)
+        try:
+            msg = await self.thread.fetch_message(self.review_message_id)
+            await msg.edit(view=post_view)
+        except Exception:
+            pass
+
         await interaction.followup.send("❌ Application denied. User has been notified.", ephemeral=True)
 
 
@@ -611,7 +632,8 @@ class ReviewView(discord.ui.View):
     async def deny(self, interaction: discord.Interaction, button: discord.ui.Button):
         modal = DenyReasonModal(
             self.config, self.bot, self.slug, self.user_id,
-            self.guild_id, interaction.channel
+            self.guild_id, interaction.channel,
+            review_message_id=interaction.message.id,
         )
         await interaction.response.send_modal(modal)
 
