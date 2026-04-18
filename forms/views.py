@@ -815,41 +815,6 @@ class _RoleSelectStepView(discord.ui.View):
         self.stop()
 
 
-class _CooldownModal(discord.ui.Modal, title="Re-application Cooldown"):
-    days = discord.ui.TextInput(
-        label="Cooldown (days)",
-        placeholder="7",
-        max_length=3,
-        required=False,
-    )
-
-    def __init__(self):
-        super().__init__()
-        self.cooldown_days = 7
-
-    async def on_submit(self, interaction: discord.Interaction):
-        try:
-            n = int(self.days.value or "7")
-            self.cooldown_days = max(0, n)
-        except ValueError:
-            self.cooldown_days = 7
-        await interaction.response.defer()
-        self.stop()
-
-
-class _OpenModalView(discord.ui.View):
-    """One-button view that opens a modal when clicked."""
-
-    def __init__(self, modal: discord.ui.Modal):
-        super().__init__(timeout=120)
-        self._modal = modal
-
-    @discord.ui.button(label="Set Cooldown", style=discord.ButtonStyle.blurple)
-    async def open_modal(self, interaction: discord.Interaction, button: discord.ui.Button):
-        self.stop()
-        await interaction.response.send_modal(self._modal)
-
-
 class ApplicationSettingsView(discord.ui.View):
     def __init__(self, config: Config, bot):
         super().__init__(timeout=180)
@@ -964,17 +929,7 @@ class ApplicationSettingsView(discord.ui.View):
         )
         await role_view.wait()
 
-        # Cooldown modal
-        cooldown_modal = _CooldownModal()
-        await interaction.followup.send(
-            "Almost done! Click below to set the re-application cooldown.",
-            view=_OpenModalView(cooldown_modal),
-            ephemeral=True,
-        )
-        await cooldown_modal.wait()
-
         approval_role_id = role_view.selected_role_id
-        cooldown_days = cooldown_modal.cooldown_days
 
         await manager.assign_application(
             guild=interaction.guild,
@@ -983,7 +938,6 @@ class ApplicationSettingsView(discord.ui.View):
             description=app["description"],
             channel=actual_channel,
             approval_role_id=approval_role_id,
-            cooldown_days=cooldown_days,
         )
         await interaction.followup.send(
             f"✅ **{app['name']}** has been assigned to {actual_channel.mention}!",
