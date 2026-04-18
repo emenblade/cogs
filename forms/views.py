@@ -732,7 +732,7 @@ class MaxTicketsModal(discord.ui.Modal, title="Max Open Tickets"):
 
 class TicketSettingsView(discord.ui.View):
     def __init__(self, config: Config, bot):
-        super().__init__(timeout=180)
+        super().__init__(timeout=None)
         self.config = config
         self.bot = bot
 
@@ -880,7 +880,7 @@ class _RemoveRoleSelectStepView(discord.ui.View):
 
 class ApplicationSettingsView(discord.ui.View):
     def __init__(self, config: Config, bot):
-        super().__init__(timeout=180)
+        super().__init__(timeout=None)
         self.config = config
         self.bot = bot
 
@@ -1028,7 +1028,7 @@ class ApplicationSettingsView(discord.ui.View):
 
 class SettingsPanelView(discord.ui.View):
     def __init__(self, config: Config, bot):
-        super().__init__(timeout=180)
+        super().__init__(timeout=None)
         self.config = config
         self.bot = bot
 
