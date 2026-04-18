@@ -56,7 +56,7 @@ async def test_load_applications_returns_all_json_files():
 
 @pytest.mark.asyncio
 async def test_assign_application_saves_to_config():
-    """assign_application must save channel_id, approval_role_id, and cooldown_days to config."""
+    """assign_application must save channel_id and approval_role_id to config (no cooldown_days)."""
     with tempfile.TemporaryDirectory() as tmpdir:
         mock_conf = MagicMock()
         guild_conf = MagicMock()
@@ -81,7 +81,6 @@ async def test_assign_application_saves_to_config():
             description="Join the mod team",
             channel=mock_channel,
             approval_role_id=789,
-            cooldown_days=7,
         )
 
         guild_conf.application_assignments.set.assert_called_once()
@@ -89,7 +88,7 @@ async def test_assign_application_saves_to_config():
         assert "mod-application" in saved
         assert saved["mod-application"]["channel_id"] == 123
         assert saved["mod-application"]["approval_role_id"] == 789
-        assert saved["mod-application"]["cooldown_days"] == 7
+        assert "cooldown_days" not in saved["mod-application"]
 
 
 @pytest.mark.asyncio
@@ -176,12 +175,12 @@ async def test_post_review_forum_creates_thread_with_transcript():
     with tempfile.TemporaryDirectory() as tmpdir:
         mock_conf = MagicMock()
         guild_conf = MagicMock()
-        guild_conf.ticket_forum = AsyncMock(return_value=777)
+        guild_conf.application_forum = AsyncMock(return_value=777)
         guild_conf.application_tag_id = AsyncMock(return_value=888)
         guild_conf.application_assignments = AsyncMock(return_value={
             "mod-application": {
                 "channel_id": 1, "panel_message_id": 2,
-                "approval_role_id": 3, "cooldown_days": 7,
+                "approval_role_id": 3,
                 "active_reviews": {}
             }
         })

@@ -197,7 +197,6 @@ class ApplicationManager:
         description: str,
         channel: discord.TextChannel,
         approval_role_id: int,
-        cooldown_days: int,
     ) -> discord.Message:
         """Post the application embed in a channel and save the assignment to config."""
         from .views import ApplyView
@@ -217,7 +216,6 @@ class ApplicationManager:
             "channel_id": channel.id,
             "panel_message_id": msg.id,
             "approval_role_id": approval_role_id,
-            "cooldown_days": cooldown_days,
             "active_reviews": {},
         }
         await guild_conf.application_assignments.set(assignments)

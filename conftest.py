@@ -47,6 +47,20 @@ def _build_redbot_stub():
             return func
         return decorator
 
+    def hybrid_group(**kwargs):
+        def decorator(func):
+            func._is_hybrid_group = True
+            func._kwargs = kwargs
+
+            def sub_command(**kw):
+                def inner(f):
+                    f._is_command = True
+                    return f
+                return inner
+            func.command = sub_command
+            return func
+        return decorator
+
     def guild_only():
         def decorator(func):
             return func
@@ -63,6 +77,7 @@ def _build_redbot_stub():
     commands_mod.Cog = Cog
     commands_mod.command = command
     commands_mod.group = group
+    commands_mod.hybrid_group = hybrid_group
     commands_mod.guild_only = guild_only
     commands_mod.admin_or_permissions = admin_or_permissions
     commands_mod.Context = Context
