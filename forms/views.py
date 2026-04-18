@@ -516,7 +516,7 @@ class DenyReasonModal(discord.ui.Modal, title="Denial Reason"):
         max_length=1000,
     )
     cooldown = discord.ui.TextInput(
-        label="Re-application cooldown (days, 0 = no cooldown)",
+        label="Cooldown days (0 = no cooldown)",
         placeholder="7",
         max_length=3,
         required=False,
