@@ -147,11 +147,20 @@ class TicketCategoriesModal(discord.ui.Modal, title="Ticket Categories"):
         max_length=2,
     )
 
-    def __init__(self, config: Config, guild_id: int, bot):
+    def __init__(self, config: Config, guild_id: int, bot,
+                 existing_cats: list[str] | None = None, existing_max: int | None = None):
         super().__init__()
         self.config = config
         self.guild_id = guild_id
         self.bot = bot
+        if existing_cats:
+            for field, value in zip(
+                [self.cat1, self.cat2, self.cat3, self.cat4, self.cat5],
+                existing_cats[:5],
+            ):
+                field.default = value
+        if existing_max is not None:
+            self.max_open.default = str(existing_max)
 
     async def on_submit(self, interaction: discord.Interaction):
         categories = [
@@ -177,7 +186,13 @@ class WizardStep7View(_WizardStepView):
     @discord.ui.button(label="Enter Categories", style=discord.ButtonStyle.blurple)
     async def enter_categories(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.stop()
-        modal = TicketCategoriesModal(self.config, self.guild_id, self.bot)
+        existing_cats = await self.config.guild_from_id(self.guild_id).ticket_categories()
+        existing_max = await self.config.guild_from_id(self.guild_id).ticket_max_open()
+        modal = TicketCategoriesModal(
+            self.config, self.guild_id, self.bot,
+            existing_cats=existing_cats or None,
+            existing_max=existing_max,
+        )
         await interaction.response.send_modal(modal)
 
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.red)
