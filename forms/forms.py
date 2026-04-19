@@ -141,21 +141,22 @@ class Forms(commands.Cog):
     async def forms_setup(self, ctx: commands.Context) -> None:
         """Run the first-time setup wizard (admins only).
 
-        Walks through a 5-step interactive wizard to configure the cog:
+        Walks through a 5-step interactive wizard to configure tickets:
 
-        Step 1 — Ticket channel: the channel where the "Open Ticket" panel button is posted.
-        Step 2 — Ticket category: the Discord category under which private ticket channels are created.
+        Step 1 — Ticket channel: where the Open Ticket panel button is posted.
+        Step 2 — Ticket category: the Discord category where private ticket channels are created.
         Step 3 — Staff role: the role that can close tickets and access the settings panel.
-        Step 4 — Ticket forum: the forum channel where closed ticket transcripts are archived (TICKET tag created automatically).
-        Step 5 — Categories & limits: ticket category names (one per line) and the max number of open tickets per user.
+        Step 4 — Ticket forum: the forum channel where closed ticket transcripts are archived
+                  (a TICKET tag is created automatically).
+        Step 5 — Categories & limits: ticket category names (one per line) and the max
+                  number of open tickets per user.
 
-        Application review forums are configured per-application when using Assign to Channel in settings.
+        Once the wizard completes, the Open Ticket panel is posted to the configured channel.
+        Re-running setup overwrites existing ticket settings — use `forms settings` for
+        targeted changes. Application review forums are configured per-application via
+        Assign to Channel in settings, not here.
 
-        Once the wizard completes, the ticket panel embed is posted to the configured channel.
-        Re-running setup overwrites existing settings — use `forms settings` for targeted changes.
-
-        Each wizard step has a 5-minute timeout. If you don't interact within that window
-        the wizard will expire and you'll need to run the command again.
+        Each wizard step has a 5-minute timeout.
         """
         view = WizardStep1View(self.config, ctx.guild.id, self.bot)
         embed = discord.Embed(
@@ -172,28 +173,34 @@ class Forms(commands.Cog):
         Displays a two-section settings panel:
 
         **Ticket Settings**
-        - Change Ticket Channel — re-point the panel to a different channel.
+        - Change Ticket Channel — re-point the Open Ticket panel to a different channel.
         - Edit Categories — update the ticket category names shown to users.
         - Set Max Tickets — change the per-user open ticket limit (1–20).
-        - Re-post Ticket Panel — use this if the panel message was deleted or lost.
+        - Re-post Ticket Panel — re-posts the Open Ticket embed if it was deleted or lost.
 
         **Application Settings**
         - Create Application — opens a name/description modal, then walks you through
-          adding questions via DM (up to 50). Each question has a 10-minute reply window.
+          adding questions via DM (up to 50 questions). Each question has a 10-minute window.
         - Edit Application — select an existing application and update its questions via DM.
           Each question has a 5-minute reply window.
-        - Delete Application — permanently removes an application template.
-        - Assign to Channel — posts an Apply button embed to a channel, selecting which
-          application, which approval role to grant on approval, and the re-application cooldown.
+        - Delete Application — permanently removes an application template and deletes its
+          Apply button from the channel it was assigned to.
+        - Manage Assignments — view, edit, or remove existing channel assignments.
+          Shows the current review forum, role settings, and reviewer roles for each.
+          Edit runs a 5-step update wizard; Remove deletes the Apply button from the channel.
+        - Assign to Channel — posts an Apply button embed to a channel via a 7-step wizard:
+          (1) application, (2) channel, (3) review forum, (4) approval role, (5) removal role,
+          (6) required role, (7) additional reviewer roles. Staff can always approve/deny;
+          reviewer roles extend that to department leads or other non-staff roles.
 
-        The settings panel itself has a 3-minute inactivity timeout.
+        Cooldowns are set per-denial in the Deny modal, not during assignment.
         """
         # Dynamic staff role permission check
         staff_role_id = await self.config.guild(ctx.guild).ticket_staff_role()
         is_admin = ctx.author.guild_permissions.administrator
         has_staff_role = staff_role_id and any(r.id == staff_role_id for r in ctx.author.roles)
         if not is_admin and not has_staff_role:
-            await ctx.send("You don't have permission to use this command.", ephemeral=True)
+            await ctx.send("⚠️ You don't have permission to use this command.", ephemeral=True)
             return
 
         from .views import SettingsPanelView
