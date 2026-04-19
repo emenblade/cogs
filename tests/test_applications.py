@@ -175,12 +175,13 @@ async def test_post_review_forum_creates_thread_with_transcript():
     with tempfile.TemporaryDirectory() as tmpdir:
         mock_conf = MagicMock()
         guild_conf = MagicMock()
-        guild_conf.application_forum = AsyncMock(return_value=777)
         guild_conf.application_tag_id = AsyncMock(return_value=888)
         guild_conf.application_assignments = AsyncMock(return_value={
             "mod-application": {
                 "channel_id": 1, "panel_message_id": 2,
                 "approval_role_id": 3,
+                "review_forum_id": 777,
+                "reviewer_role_ids": [],
                 "active_reviews": {}
             }
         })

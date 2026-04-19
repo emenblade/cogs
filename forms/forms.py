@@ -27,7 +27,6 @@ class Forms(commands.Cog):
             ticket_user_role=None,
             ticket_staff_role=None,
             ticket_forum=None,
-            application_forum=None,
             ticket_categories=[],
             ticket_counter=0,
             ticket_panel_message=None,
@@ -142,14 +141,15 @@ class Forms(commands.Cog):
     async def forms_setup(self, ctx: commands.Context) -> None:
         """Run the first-time setup wizard (admins only).
 
-        Walks through a 6-step interactive wizard to configure the cog:
+        Walks through a 5-step interactive wizard to configure the cog:
 
         Step 1 — Ticket channel: the channel where the "Open Ticket" panel button is posted.
         Step 2 — Ticket category: the Discord category under which private ticket channels are created.
         Step 3 — Staff role: the role that can close tickets and access the settings panel.
         Step 4 — Ticket forum: the forum channel where closed ticket transcripts are archived (TICKET tag created automatically).
-        Step 5 — Application forum: the forum channel where application reviews are posted for staff.
-        Step 6 — Categories & limits: ticket category names (one per line) and the max number of open tickets per user.
+        Step 5 — Categories & limits: ticket category names (one per line) and the max number of open tickets per user.
+
+        Application review forums are configured per-application when using Assign to Channel in settings.
 
         Once the wizard completes, the ticket panel embed is posted to the configured channel.
         Re-running setup overwrites existing settings — use `forms settings` for targeted changes.
@@ -159,7 +159,7 @@ class Forms(commands.Cog):
         """
         view = WizardStep1View(self.config, ctx.guild.id, self.bot)
         embed = discord.Embed(
-            title="Forms Setup — Step 1 of 6",
+            title="Forms Setup — Step 1 of 5",
             description="Select the **ticket channel** where the Open Ticket button will be posted.",
             color=discord.Color.blurple(),
         )

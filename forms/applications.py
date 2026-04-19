@@ -199,6 +199,8 @@ class ApplicationManager:
         approval_role_id: int,
         removal_role_id: int | None = None,
         required_role_id: int | None = None,
+        review_forum_id: int | None = None,
+        reviewer_role_ids: list[int] | None = None,
     ) -> discord.Message:
         """Post the application embed in a channel and save the assignment to config."""
         from .views import ApplyView
@@ -220,6 +222,8 @@ class ApplicationManager:
             "approval_role_id": approval_role_id,
             "removal_role_id": removal_role_id,
             "required_role_id": required_role_id,
+            "review_forum_id": review_forum_id,
+            "reviewer_role_ids": reviewer_role_ids or [],
             "active_reviews": {},
         }
         await guild_conf.application_assignments.set(assignments)
@@ -326,7 +330,8 @@ class ApplicationManager:
         from .views import ReviewView
 
         guild_conf = self.config.guild(guild)
-        forum_id = await guild_conf.application_forum()
+        assignments = await guild_conf.application_assignments()
+        forum_id = assignments.get(app["slug"], {}).get("review_forum_id")
 
         forum = guild.get_channel(forum_id) if forum_id else None
         if not forum or not isinstance(forum, discord.ForumChannel):

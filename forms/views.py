@@ -5,6 +5,18 @@ from redbot.core import Config
 from .utils import check_staff_role
 
 
+async def _check_reviewer(interaction: discord.Interaction, config: Config, slug: str) -> bool:
+    """Return True if the user has the staff role or a reviewer role for this application."""
+    guild_conf = config.guild(interaction.guild)
+    staff_role_id = await guild_conf.ticket_staff_role()
+    assignments = await guild_conf.application_assignments()
+    reviewer_role_ids = assignments.get(slug, {}).get("reviewer_role_ids", [])
+    member_role_ids = {r.id for r in getattr(interaction.user, "roles", [])}
+    if staff_role_id and staff_role_id in member_role_ids:
+        return True
+    return any(rid in member_role_ids for rid in reviewer_role_ids)
+
+
 class _WizardStepView(discord.ui.View):
     """Base class for wizard steps."""
 
@@ -124,7 +136,7 @@ class WizardStep5View(_WizardStepView):
         resolved = interaction.guild.get_channel(self._selected.id)
         if resolved and isinstance(resolved, discord.ForumChannel):
             await _ensure_forum_tags(resolved, self.config, self.guild_id)
-        await _send_wizard_app_forum(interaction, self.config, self.guild_id, self.bot)
+        await _send_wizard_step7(interaction, self.config, self.guild_id, self.bot)
 
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.red)
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -199,7 +211,7 @@ async def _ensure_forum_tags(forum: discord.ForumChannel, config: Config, guild_
 async def _send_wizard_step2(interaction: discord.Interaction, config: Config, guild_id: int, bot) -> None:
     view = WizardStep2View(config, guild_id, bot)
     embed = discord.Embed(
-        title="Forms Setup — Step 2 of 6",
+        title="Forms Setup — Step 2 of 5",
         description="Select the **category** where ticket channels will be created.",
         color=discord.Color.blurple(),
     )
@@ -209,7 +221,7 @@ async def _send_wizard_step2(interaction: discord.Interaction, config: Config, g
 async def _send_wizard_step4(interaction: discord.Interaction, config: Config, guild_id: int, bot) -> None:
     view = WizardStep4View(config, guild_id, bot)
     embed = discord.Embed(
-        title="Forms Setup — Step 3 of 6",
+        title="Forms Setup — Step 3 of 5",
         description="Select the **staff role** that can manage and close tickets.",
         color=discord.Color.blurple(),
     )
@@ -219,54 +231,17 @@ async def _send_wizard_step4(interaction: discord.Interaction, config: Config, g
 async def _send_wizard_step5(interaction: discord.Interaction, config: Config, guild_id: int, bot) -> None:
     view = WizardStep5View(config, guild_id, bot)
     embed = discord.Embed(
-        title="Forms Setup — Step 4 of 6",
+        title="Forms Setup — Step 4 of 5",
         description="Select the **forum channel** where closed ticket transcripts will be archived.",
         color=discord.Color.blurple(),
     )
     await interaction.response.edit_message(embed=embed, view=view)
 
 
-async def _send_wizard_app_forum(interaction: discord.Interaction, config: Config, guild_id: int, bot) -> None:
-    view = WizardAppForumView(config, guild_id, bot)
-    embed = discord.Embed(
-        title="Forms Setup — Step 5 of 6",
-        description="Select the **forum channel** where application reviews will be posted for staff to approve or deny.",
-        color=discord.Color.blurple(),
-    )
-    await interaction.response.edit_message(embed=embed, view=view)
-
-
-class WizardAppForumView(_WizardStepView):
-    """Step 5: Select application review forum channel."""
-
-    @discord.ui.select(
-        cls=discord.ui.ChannelSelect,
-        placeholder="Select the application review forum channel…",
-        channel_types=[discord.ChannelType.forum],
-    )
-    async def channel_select(self, interaction: discord.Interaction, select: discord.ui.ChannelSelect):
-        self._selected = select.values[0]
-        await interaction.response.defer()
-
-    @discord.ui.button(label="Confirm", style=discord.ButtonStyle.green)
-    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if self._selected is None:
-            await interaction.response.send_message("Please select a forum first.", ephemeral=True)
-            return
-        await self.config.guild_from_id(self.guild_id).application_forum.set(self._selected.id)
-        self.stop()
-        await _send_wizard_step7(interaction, self.config, self.guild_id, self.bot)
-
-    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.red)
-    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
-        self.stop()
-        await interaction.response.edit_message(content="❌ Setup cancelled.", view=None, embed=None)
-
-
 async def _send_wizard_step7(interaction: discord.Interaction, config: Config, guild_id: int, bot) -> None:
     view = WizardStep7View(config, guild_id, bot)
     embed = discord.Embed(
-        title="Forms Setup — Step 6 of 6",
+        title="Forms Setup — Step 5 of 5",
         description=(
             "Click **Enter Categories** to set your ticket category names (one per line) "
             "and the max open tickets per user."
@@ -601,6 +576,11 @@ class ReviewView(discord.ui.View):
         label="✅ Approve", style=discord.ButtonStyle.green, custom_id="forms:approve:_"
     )
     async def approve(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await _check_reviewer(interaction, self.config, self.slug):
+            await interaction.response.send_message(
+                "You don't have permission to review this application.", ephemeral=True
+            )
+            return
         await interaction.response.defer(ephemeral=True)
         guild = interaction.guild
         assignments = await self.config.guild(guild).application_assignments()
@@ -649,6 +629,11 @@ class ReviewView(discord.ui.View):
         label="❌ Deny", style=discord.ButtonStyle.red, custom_id="forms:deny:_"
     )
     async def deny(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await _check_reviewer(interaction, self.config, self.slug):
+            await interaction.response.send_message(
+                "You don't have permission to review this application.", ephemeral=True
+            )
+            return
         modal = DenyReasonModal(
             self.config, self.bot, self.slug, self.user_id,
             self.guild_id, interaction.channel,
@@ -677,6 +662,11 @@ class PostReviewView(discord.ui.View):
         custom_id="forms:reset_cooldown:_",
     )
     async def reset_cooldown(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await _check_reviewer(interaction, self.config, self.slug):
+            await interaction.response.send_message(
+                "You don't have permission to manage this application.", ephemeral=True
+            )
+            return
         guild = interaction.guild or self.bot.get_guild(self.guild_id)
         user = (guild.get_member(self.user_id) if guild else None) or await self.bot.fetch_user(self.user_id)
         cooldowns = await self.config.user(user).application_cooldowns()
@@ -694,6 +684,11 @@ class PostReviewView(discord.ui.View):
         custom_id="forms:close_log:_",
     )
     async def close_log(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await _check_reviewer(interaction, self.config, self.slug):
+            await interaction.response.send_message(
+                "You don't have permission to manage this application.", ephemeral=True
+            )
+            return
         await interaction.response.defer()
         await interaction.channel.edit(archived=True, locked=True)
 
@@ -878,6 +873,48 @@ class _RemoveRoleSelectStepView(discord.ui.View):
         self.stop()
 
 
+class _ForumSelectStepView(discord.ui.View):
+    """Single forum select step used during application assignment."""
+
+    def __init__(self):
+        super().__init__(timeout=120)
+        self.selected_channel = None
+
+    @discord.ui.select(
+        cls=discord.ui.ChannelSelect,
+        placeholder="Select review forum channel…",
+        channel_types=[discord.ChannelType.forum],
+    )
+    async def channel_select(self, interaction: discord.Interaction, select: discord.ui.ChannelSelect):
+        self.selected_channel = select.values[0]
+        await interaction.response.defer()
+        self.stop()
+
+
+class _ReviewerRolesStepView(discord.ui.View):
+    """Multi-role select for choosing reviewer roles on an application."""
+
+    def __init__(self):
+        super().__init__(timeout=120)
+        self.selected_role_ids: list[int] = []
+
+    @discord.ui.select(
+        cls=discord.ui.RoleSelect,
+        placeholder="Select additional reviewer roles…",
+        min_values=1,
+        max_values=10,
+    )
+    async def role_select(self, interaction: discord.Interaction, select: discord.ui.RoleSelect):
+        self.selected_role_ids = [r.id for r in select.values]
+        await interaction.response.defer()
+        self.stop()
+
+    @discord.ui.button(label="Skip (staff only)", style=discord.ButtonStyle.grey)
+    async def skip(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
+        self.stop()
+
+
 class ApplicationSettingsView(discord.ui.View):
     def __init__(self, config: Config, bot):
         super().__init__(timeout=None)
@@ -946,6 +983,40 @@ class ApplicationSettingsView(discord.ui.View):
                 await self.config.guild(interaction.guild).application_assignments.set(assignments)
                 await interaction.followup.send("✅ Application deleted.", ephemeral=True)
 
+    @discord.ui.button(label="📊 Manage Assignments", style=discord.ButtonStyle.blurple)
+    async def manage_assignments(self, interaction: discord.Interaction, button: discord.ui.Button):
+        from redbot.core.data_manager import cog_data_path
+        from .applications import ApplicationManager
+        manager = ApplicationManager(self.bot, self.config, cog_data_path(self.bot.cogs["Forms"]))
+
+        assignments = await self.config.guild(interaction.guild).application_assignments()
+        if not assignments:
+            await interaction.response.send_message(
+                "No applications are currently assigned.", ephemeral=True
+            )
+            return
+
+        apps = await manager.load_applications()
+        options = [
+            discord.SelectOption(label=apps.get(slug, {}).get("name", slug), value=slug)
+            for slug in assignments
+        ]
+        view = _SingleSelectView(options, placeholder="Select an assigned application…")
+        await interaction.response.send_message(
+            "Which assignment do you want to manage?", view=view, ephemeral=True
+        )
+        await view.wait()
+        if not view.selected:
+            return
+
+        slug = view.selected
+        assignment = assignments[slug]
+        app = apps.get(slug, {})
+
+        embed = _build_assignment_embed(app, assignment, slug, interaction.guild)
+        mgmt_view = _AssignmentManagementView(self.config, self.bot, slug, assignment)
+        await interaction.followup.send(embed=embed, view=mgmt_view, ephemeral=True)
+
     @discord.ui.button(label="📌 Assign to Channel", style=discord.ButtonStyle.grey)
     async def assign_app(self, interaction: discord.Interaction, button: discord.ui.Button):
         from redbot.core.data_manager import cog_data_path
@@ -958,7 +1029,7 @@ class ApplicationSettingsView(discord.ui.View):
         options = [discord.SelectOption(label=a["name"], value=slug) for slug, a in apps.items()]
         view = _SingleSelectView(options, placeholder="Select application to assign…")
         await interaction.response.send_message(
-            "**Step 1 of 5:** Which application do you want to assign to a channel?",
+            "**Step 1 of 7:** Which application do you want to assign to a channel?",
             view=view,
             ephemeral=True,
         )
@@ -971,7 +1042,7 @@ class ApplicationSettingsView(discord.ui.View):
         # Step 2: pick channel
         channel_view = _ChannelSelectStepView()
         await interaction.followup.send(
-            f"**Step 2 of 5:** Select the channel where the **{app['name']}** Apply button will be posted.",
+            f"**Step 2 of 7:** Select the channel where the **{app['name']}** Apply button will be posted.",
             view=channel_view,
             ephemeral=True,
         )
@@ -983,32 +1054,52 @@ class ApplicationSettingsView(discord.ui.View):
             await interaction.followup.send("Could not find the selected channel.", ephemeral=True)
             return
 
-        # Step 3: pick approval role
+        # Step 3: pick review forum
+        forum_view = _ForumSelectStepView()
+        await interaction.followup.send(
+            "**Step 3 of 7:** Select the **forum channel** where submitted applications will be posted for review.",
+            view=forum_view,
+            ephemeral=True,
+        )
+        await forum_view.wait()
+        review_forum_id = forum_view.selected_channel.id if forum_view.selected_channel else None
+
+        # Step 4: pick approval role
         role_view = _RoleSelectStepView()
         await interaction.followup.send(
-            "**Step 3 of 5:** Select the role to **grant** on approval (or skip for none).",
+            "**Step 4 of 7:** Select the role to **grant** on approval (or skip for none).",
             view=role_view,
             ephemeral=True,
         )
         await role_view.wait()
 
-        # Step 4: pick removal role
+        # Step 5: pick removal role
         remove_role_view = _RemoveRoleSelectStepView()
         await interaction.followup.send(
-            "**Step 4 of 5:** Select the role to **remove** on approval (or skip for none).",
+            "**Step 5 of 7:** Select the role to **remove** on approval (or skip for none).",
             view=remove_role_view,
             ephemeral=True,
         )
         await remove_role_view.wait()
 
-        # Step 5: pick required role
+        # Step 6: pick required role
         required_role_view = _RequiredRoleSelectStepView()
         await interaction.followup.send(
-            "**Step 5 of 5:** Select a role applicants **must already have** to apply (or skip for no requirement).",
+            "**Step 6 of 7:** Select a role applicants **must already have** to apply (or skip for no requirement).",
             view=required_role_view,
             ephemeral=True,
         )
         await required_role_view.wait()
+
+        # Step 7: pick reviewer roles
+        reviewer_roles_view = _ReviewerRolesStepView()
+        await interaction.followup.send(
+            "**Step 7 of 7:** Select **additional roles** that can approve/deny/manage this application "
+            "(staff can always review — skip to keep it staff-only).",
+            view=reviewer_roles_view,
+            ephemeral=True,
+        )
+        await reviewer_roles_view.wait()
 
         await manager.assign_application(
             guild=interaction.guild,
@@ -1019,11 +1110,150 @@ class ApplicationSettingsView(discord.ui.View):
             approval_role_id=role_view.selected_role_id,
             removal_role_id=remove_role_view.selected_role_id,
             required_role_id=required_role_view.selected_role_id,
+            review_forum_id=review_forum_id,
+            reviewer_role_ids=reviewer_roles_view.selected_role_ids,
         )
         await interaction.followup.send(
             f"✅ **{app['name']}** has been assigned to {actual_channel.mention}!",
             ephemeral=True,
         )
+
+
+def _build_assignment_embed(app: dict, assignment: dict, slug: str, guild: discord.Guild) -> discord.Embed:
+    embed = discord.Embed(
+        title=f"Assignment: {app.get('name', slug)}",
+        color=discord.Color.blurple(),
+    )
+    embed.add_field(name="Channel", value=f"<#{assignment['channel_id']}>", inline=True)
+
+    forum_id = assignment.get("review_forum_id")
+    embed.add_field(name="Review Forum", value=f"<#{forum_id}>" if forum_id else "Not set", inline=True)
+
+    embed.add_field(name="\u200b", value="\u200b", inline=False)
+
+    approval_id = assignment.get("approval_role_id")
+    embed.add_field(name="Approval Role", value=f"<@&{approval_id}>" if approval_id else "None", inline=True)
+
+    removal_id = assignment.get("removal_role_id")
+    embed.add_field(name="Removal Role", value=f"<@&{removal_id}>" if removal_id else "None", inline=True)
+
+    required_id = assignment.get("required_role_id")
+    embed.add_field(name="Required Role", value=f"<@&{required_id}>" if required_id else "None", inline=True)
+
+    reviewer_ids = assignment.get("reviewer_role_ids", [])
+    reviewer_text = " ".join(f"<@&{rid}>" for rid in reviewer_ids) if reviewer_ids else "Staff only"
+    embed.add_field(name="Additional Reviewer Roles", value=reviewer_text, inline=False)
+
+    active = len(assignment.get("active_reviews", {}))
+    embed.set_footer(text=f"{active} active review(s)")
+    return embed
+
+
+class _AssignmentManagementView(discord.ui.View):
+    def __init__(self, config: Config, bot, slug: str, assignment: dict):
+        super().__init__(timeout=120)
+        self.config = config
+        self.bot = bot
+        self.slug = slug
+        self.assignment = assignment
+
+    @discord.ui.button(label="✏️ Edit Assignment", style=discord.ButtonStyle.blurple)
+    async def edit(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+
+        forum_view = _ForumSelectStepView()
+        current_forum_id = self.assignment.get("review_forum_id")
+        forum_hint = f" (currently <#{current_forum_id}>)" if current_forum_id else ""
+        await interaction.followup.send(
+            f"**Edit Step 1 of 5:** Select the review forum{forum_hint}.",
+            view=forum_view, ephemeral=True,
+        )
+        await forum_view.wait()
+
+        role_view = _RoleSelectStepView()
+        current_approval = self.assignment.get("approval_role_id")
+        approval_hint = f" (currently <@&{current_approval}>)" if current_approval else ""
+        await interaction.followup.send(
+            f"**Edit Step 2 of 5:** Select the approval role{approval_hint} (or skip for none).",
+            view=role_view, ephemeral=True,
+        )
+        await role_view.wait()
+
+        remove_view = _RemoveRoleSelectStepView()
+        current_removal = self.assignment.get("removal_role_id")
+        removal_hint = f" (currently <@&{current_removal}>)" if current_removal else ""
+        await interaction.followup.send(
+            f"**Edit Step 3 of 5:** Select the removal role{removal_hint} (or skip for none).",
+            view=remove_view, ephemeral=True,
+        )
+        await remove_view.wait()
+
+        required_view = _RequiredRoleSelectStepView()
+        current_required = self.assignment.get("required_role_id")
+        required_hint = f" (currently <@&{current_required}>)" if current_required else ""
+        await interaction.followup.send(
+            f"**Edit Step 4 of 5:** Select the required role{required_hint} (or skip for none).",
+            view=required_view, ephemeral=True,
+        )
+        await required_view.wait()
+
+        reviewer_view = _ReviewerRolesStepView()
+        current_reviewers = self.assignment.get("reviewer_role_ids", [])
+        reviewer_hint = (
+            " (currently " + ", ".join(f"<@&{r}>" for r in current_reviewers) + ")"
+            if current_reviewers else " (currently staff only)"
+        )
+        await interaction.followup.send(
+            f"**Edit Step 5 of 5:** Select additional reviewer roles{reviewer_hint} (or skip for staff only).",
+            view=reviewer_view, ephemeral=True,
+        )
+        await reviewer_view.wait()
+
+        guild_conf = self.config.guild(interaction.guild)
+        assignments = await guild_conf.application_assignments()
+        if self.slug not in assignments:
+            await interaction.followup.send("Assignment no longer exists.", ephemeral=True)
+            return
+
+        if forum_view.selected_channel:
+            assignments[self.slug]["review_forum_id"] = forum_view.selected_channel.id
+        assignments[self.slug]["approval_role_id"] = role_view.selected_role_id
+        assignments[self.slug]["removal_role_id"] = remove_view.selected_role_id
+        assignments[self.slug]["required_role_id"] = required_view.selected_role_id
+        assignments[self.slug]["reviewer_role_ids"] = reviewer_view.selected_role_ids
+
+        await guild_conf.application_assignments.set(assignments)
+        await interaction.followup.send("✅ Assignment updated.", ephemeral=True)
+
+    @discord.ui.button(label="🗑️ Remove Assignment", style=discord.ButtonStyle.red)
+    async def remove(self, interaction: discord.Interaction, button: discord.ui.Button):
+        confirm = ConfirmView()
+        app_name = self.assignment.get("name", self.slug)
+        await interaction.response.send_message(
+            f"Remove the **{self.slug}** assignment? The Apply button message will be deleted from the channel.",
+            view=confirm, ephemeral=True,
+        )
+        await confirm.wait()
+        if not confirm.confirmed:
+            await interaction.followup.send("Cancelled.", ephemeral=True)
+            return
+
+        guild = interaction.guild
+        channel_id = self.assignment.get("channel_id")
+        panel_msg_id = self.assignment.get("panel_message_id")
+        if channel_id and panel_msg_id:
+            channel = guild.get_channel(channel_id)
+            if channel:
+                try:
+                    msg = await channel.fetch_message(panel_msg_id)
+                    await msg.delete()
+                except Exception:
+                    pass
+
+        assignments = await self.config.guild(guild).application_assignments()
+        assignments.pop(self.slug, None)
+        await self.config.guild(guild).application_assignments.set(assignments)
+        await interaction.followup.send("✅ Assignment removed.", ephemeral=True)
 
 
 class SettingsPanelView(discord.ui.View):
@@ -1070,5 +1300,17 @@ class SettingsPanelView(discord.ui.View):
                 inline=False,
             )
         else:
-            embed.add_field(name="Saved Applications", value="None yet")
+            embed.add_field(name="Saved Applications", value="None yet", inline=False)
+
+        assignments = await self.config.guild(interaction.guild).application_assignments()
+        if assignments:
+            lines = []
+            for slug, asgn in assignments.items():
+                app_name = apps.get(slug, {}).get("name", slug)
+                channel_id = asgn.get("channel_id")
+                lines.append(f"• **{app_name}** → <#{channel_id}>")
+            embed.add_field(name="Assigned Applications", value="\n".join(lines), inline=False)
+        else:
+            embed.add_field(name="Assigned Applications", value="None", inline=False)
+
         await interaction.response.edit_message(embed=embed, view=view)
