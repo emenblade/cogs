@@ -47,7 +47,7 @@ class WizardStep1View(_WizardStepView):
     @discord.ui.button(label="Confirm", style=discord.ButtonStyle.green)
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
         if self._selected is None:
-            await interaction.response.send_message("Please select a channel first.", ephemeral=True)
+            await interaction.response.send_message("⚠️ Please select a channel first.", ephemeral=True)
             return
         await self.config.guild_from_id(self.guild_id).ticket_channel.set(self._selected.id)
         self.stop()
@@ -74,7 +74,7 @@ class WizardStep2View(_WizardStepView):
     @discord.ui.button(label="Confirm", style=discord.ButtonStyle.green)
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
         if self._selected is None:
-            await interaction.response.send_message("Please select a category first.", ephemeral=True)
+            await interaction.response.send_message("⚠️ Please select a category first.", ephemeral=True)
             return
         await self.config.guild_from_id(self.guild_id).ticket_category.set(self._selected.id)
         self.stop()
@@ -101,7 +101,7 @@ class WizardStep4View(_WizardStepView):
     @discord.ui.button(label="Confirm", style=discord.ButtonStyle.green)
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
         if self._selected is None:
-            await interaction.response.send_message("Please select a role first.", ephemeral=True)
+            await interaction.response.send_message("⚠️ Please select a role first.", ephemeral=True)
             return
         await self.config.guild_from_id(self.guild_id).ticket_staff_role.set(self._selected.id)
         self.stop()
@@ -118,7 +118,7 @@ class WizardStep5View(_WizardStepView):
 
     @discord.ui.select(
         cls=discord.ui.ChannelSelect,
-        placeholder="Select the staff forum channel…",
+        placeholder="Select the ticket forum channel…",
         channel_types=[discord.ChannelType.forum],
     )
     async def channel_select(self, interaction: discord.Interaction, select: discord.ui.ChannelSelect):
@@ -128,7 +128,7 @@ class WizardStep5View(_WizardStepView):
     @discord.ui.button(label="Confirm", style=discord.ButtonStyle.green)
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
         if self._selected is None:
-            await interaction.response.send_message("Please select a forum first.", ephemeral=True)
+            await interaction.response.send_message("⚠️ Please select a forum first.", ephemeral=True)
             return
         await self.config.guild_from_id(self.guild_id).ticket_forum.set(self._selected.id)
         self.stop()
@@ -295,7 +295,7 @@ class TicketPanelView(discord.ui.View):
         categories = await guild_conf.ticket_categories()
         if not categories:
             await interaction.response.send_message(
-                "Tickets are not fully configured yet. Please contact staff.", ephemeral=True
+                "⚠️ Tickets are not fully configured yet. Please contact staff.", ephemeral=True
             )
             return
 
@@ -304,7 +304,7 @@ class TicketPanelView(discord.ui.View):
         open_tickets = await self.config.member(interaction.user).open_tickets()
         if len(open_tickets) >= max_open:
             await interaction.response.send_message(
-                f"You already have {len(open_tickets)} open ticket(s). "
+                f"⚠️ You already have {len(open_tickets)} open ticket(s). "
                 f"Please wait for them to be resolved before opening a new one.",
                 ephemeral=True,
             )
@@ -362,7 +362,7 @@ class CloseTicketView(discord.ui.View):
     async def close_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not check_staff_role(interaction, self.staff_role_id):
             await interaction.response.send_message(
-                "Only staff can close tickets.", ephemeral=True
+                "⚠️ Only staff can close tickets.", ephemeral=True
             )
             return
         from .tickets import TicketManager
@@ -426,7 +426,7 @@ class ApplyView(discord.ui.View):
         active = await self.config.user(interaction.user).active_application()
         if active is not None:
             await interaction.response.send_message(
-                "You already have an application in progress. Please complete it first.",
+                "⚠️ You already have an application in progress. Please complete it first.",
                 ephemeral=True,
             )
             return
@@ -436,7 +436,7 @@ class ApplyView(discord.ui.View):
         app_conf = assignments.get(self.slug, {})
         if str(interaction.user.id) in app_conf.get("active_reviews", {}):
             await interaction.response.send_message(
-                "Your application is currently awaiting staff review. "
+                "⚠️ Your application is currently awaiting staff review. "
                 "Please be patient — this process can take a few days.",
                 ephemeral=True,
             )
@@ -450,7 +450,7 @@ class ApplyView(discord.ui.View):
                 role = interaction.guild.get_role(required_role_id)
                 role_name = role.name if role else "a required role"
                 await interaction.response.send_message(
-                    f"You need the **{role_name}** role to apply for this.",
+                    f"⚠️ You need the **{role_name}** role to apply for this.",
                     ephemeral=True,
                 )
                 return
@@ -463,7 +463,7 @@ class ApplyView(discord.ui.View):
             days, rem = divmod(remaining, 86400)
             hours = rem // 3600
             await interaction.response.send_message(
-                f"You can re-apply in {days}d {hours}h.", ephemeral=True
+                f"⚠️ You can re-apply in {days}d {hours}h.", ephemeral=True
             )
             return
 
@@ -473,7 +473,7 @@ class ApplyView(discord.ui.View):
             await dm.send("Starting your application…")
         except discord.Forbidden:
             await interaction.response.send_message(
-                "Please enable DMs from server members to apply.", ephemeral=True
+                "⚠️ Please enable DMs from server members to apply.", ephemeral=True
             )
             return
 
@@ -483,7 +483,7 @@ class ApplyView(discord.ui.View):
         await manager.start_application(interaction.user, interaction.guild, self.slug, dm)
 
 
-class DenyReasonModal(discord.ui.Modal, title="Denial Reason"):
+class DenyReasonModal(discord.ui.Modal, title="Deny Application"):
     reason = discord.ui.TextInput(
         label="Reason for denial",
         style=discord.TextStyle.paragraph,
@@ -554,7 +554,7 @@ class DenyReasonModal(discord.ui.Modal, title="Denial Reason"):
         except Exception:
             pass
 
-        await interaction.followup.send("❌ Application denied. User has been notified.", ephemeral=True)
+        await interaction.followup.send("❌ Application denied. User notified.", ephemeral=True)
 
 
 class ReviewView(discord.ui.View):
@@ -578,7 +578,7 @@ class ReviewView(discord.ui.View):
     async def approve(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not await _check_reviewer(interaction, self.config, self.slug):
             await interaction.response.send_message(
-                "You don't have permission to review this application.", ephemeral=True
+                "⚠️ You don't have permission to review this application.", ephemeral=True
             )
             return
         await interaction.response.defer(ephemeral=True)
@@ -631,7 +631,7 @@ class ReviewView(discord.ui.View):
     async def deny(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not await _check_reviewer(interaction, self.config, self.slug):
             await interaction.response.send_message(
-                "You don't have permission to review this application.", ephemeral=True
+                "⚠️ You don't have permission to review this application.", ephemeral=True
             )
             return
         modal = DenyReasonModal(
@@ -664,7 +664,7 @@ class PostReviewView(discord.ui.View):
     async def reset_cooldown(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not await _check_reviewer(interaction, self.config, self.slug):
             await interaction.response.send_message(
-                "You don't have permission to manage this application.", ephemeral=True
+                "⚠️ You don't have permission to manage this application.", ephemeral=True
             )
             return
         guild = interaction.guild or self.bot.get_guild(self.guild_id)
@@ -686,7 +686,7 @@ class PostReviewView(discord.ui.View):
     async def close_log(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not await _check_reviewer(interaction, self.config, self.slug):
             await interaction.response.send_message(
-                "You don't have permission to manage this application.", ephemeral=True
+                "⚠️ You don't have permission to manage this application.", ephemeral=True
             )
             return
         await interaction.response.defer()
@@ -718,7 +718,7 @@ class MaxTicketsModal(discord.ui.Modal, title="Max Open Tickets"):
             assert 1 <= n <= 20
         except (ValueError, AssertionError):
             await interaction.response.send_message(
-                "Please enter a number between 1 and 20.", ephemeral=True
+                "⚠️ Please enter a number between 1 and 20.", ephemeral=True
             )
             return
         await interaction.client.cogs["Forms"].config.guild(interaction.guild).ticket_max_open.set(n)
@@ -751,7 +751,7 @@ class TicketSettingsView(discord.ui.View):
         channel_id = await self.config.guild(interaction.guild).ticket_channel()
         channel = interaction.guild.get_channel(channel_id) if channel_id else None
         if not channel:
-            await interaction.response.send_message("Ticket channel not configured.", ephemeral=True)
+            await interaction.response.send_message("⚠️ Ticket channel not configured.", ephemeral=True)
             return
         manager = interaction.client.cogs["Forms"].tickets
         await manager.post_panel(channel)
@@ -777,7 +777,7 @@ class ConfirmView(discord.ui.View):
         super().__init__(timeout=60)
         self.confirmed = False
 
-    @discord.ui.button(label="Yes, delete", style=discord.ButtonStyle.red)
+    @discord.ui.button(label="Confirm", style=discord.ButtonStyle.red)
     async def yes(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.confirmed = True
         await interaction.response.defer()
@@ -909,7 +909,7 @@ class _ReviewerRolesStepView(discord.ui.View):
         await interaction.response.defer()
         self.stop()
 
-    @discord.ui.button(label="Skip (staff only)", style=discord.ButtonStyle.grey)
+    @discord.ui.button(label="Skip (no extra roles)", style=discord.ButtonStyle.grey)
     async def skip(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer()
         self.stop()
@@ -933,7 +933,7 @@ class ApplicationSettingsView(discord.ui.View):
             await interaction.user.create_dm()
         except discord.Forbidden:
             await interaction.followup.send(
-                "Please enable DMs to use the application builder.", ephemeral=True
+                "⚠️ Please enable DMs to use the application builder.", ephemeral=True
             )
             return
         await manager.create_application(
@@ -947,11 +947,11 @@ class ApplicationSettingsView(discord.ui.View):
         manager = ApplicationManager(self.bot, self.config, cog_data_path(self.bot.cogs["Forms"]))
         apps = await manager.load_applications()
         if not apps:
-            await interaction.response.send_message("No applications saved yet.", ephemeral=True)
+            await interaction.response.send_message("⚠️ No applications saved yet.", ephemeral=True)
             return
         options = [discord.SelectOption(label=a["name"], value=slug) for slug, a in apps.items()]
         view = _SingleSelectView(options, placeholder="Select application to edit…")
-        await interaction.response.send_message("Which application?", view=view, ephemeral=True)
+        await interaction.response.send_message("Select an application to edit:", view=view, ephemeral=True)
         await view.wait()
         if view.selected:
             await manager.edit_application(interaction.user, view.selected)
@@ -963,11 +963,11 @@ class ApplicationSettingsView(discord.ui.View):
         manager = ApplicationManager(self.bot, self.config, cog_data_path(self.bot.cogs["Forms"]))
         apps = await manager.load_applications()
         if not apps:
-            await interaction.response.send_message("No applications to delete.", ephemeral=True)
+            await interaction.response.send_message("⚠️ No applications to delete.", ephemeral=True)
             return
         options = [discord.SelectOption(label=a["name"], value=slug) for slug, a in apps.items()]
         view = _SingleSelectView(options, placeholder="Select application to delete…")
-        await interaction.response.send_message("Which application?", view=view, ephemeral=True)
+        await interaction.response.send_message("Select an application to delete:", view=view, ephemeral=True)
         await view.wait()
         if view.selected:
             confirm = ConfirmView()
@@ -1004,7 +1004,7 @@ class ApplicationSettingsView(discord.ui.View):
         assignments = await self.config.guild(interaction.guild).application_assignments()
         if not assignments:
             await interaction.response.send_message(
-                "No applications are currently assigned.", ephemeral=True
+                "⚠️ No applications are currently assigned.", ephemeral=True
             )
             return
 
@@ -1029,19 +1029,19 @@ class ApplicationSettingsView(discord.ui.View):
         mgmt_view = _AssignmentManagementView(self.config, self.bot, slug, assignment)
         await interaction.followup.send(embed=embed, view=mgmt_view, ephemeral=True)
 
-    @discord.ui.button(label="📌 Assign to Channel", style=discord.ButtonStyle.grey)
+    @discord.ui.button(label="📌 Assign to Channel", style=discord.ButtonStyle.blurple)
     async def assign_app(self, interaction: discord.Interaction, button: discord.ui.Button):
         from redbot.core.data_manager import cog_data_path
         from .applications import ApplicationManager
         manager = ApplicationManager(self.bot, self.config, cog_data_path(self.bot.cogs["Forms"]))
         apps = await manager.load_applications()
         if not apps:
-            await interaction.response.send_message("No applications saved yet.", ephemeral=True)
+            await interaction.response.send_message("⚠️ No applications saved yet.", ephemeral=True)
             return
         options = [discord.SelectOption(label=a["name"], value=slug) for slug, a in apps.items()]
         view = _SingleSelectView(options, placeholder="Select application to assign…")
         await interaction.response.send_message(
-            "**Step 1 of 7:** Which application do you want to assign to a channel?",
+            "**Step 1 of 7:** Select the application to assign to a channel.",
             view=view,
             ephemeral=True,
         )
@@ -1063,7 +1063,7 @@ class ApplicationSettingsView(discord.ui.View):
             return
         actual_channel = interaction.guild.get_channel(channel_view.selected_channel.id)
         if not actual_channel:
-            await interaction.followup.send("Could not find the selected channel.", ephemeral=True)
+            await interaction.followup.send("⚠️ Could not find the selected channel.", ephemeral=True)
             return
 
         # Step 3: pick review forum
@@ -1224,7 +1224,7 @@ class _AssignmentManagementView(discord.ui.View):
         guild_conf = self.config.guild(interaction.guild)
         assignments = await guild_conf.application_assignments()
         if self.slug not in assignments:
-            await interaction.followup.send("Assignment no longer exists.", ephemeral=True)
+            await interaction.followup.send("⚠️ Assignment no longer exists.", ephemeral=True)
             return
 
         if forum_view.selected_channel:
@@ -1246,7 +1246,7 @@ class _AssignmentManagementView(discord.ui.View):
         )
         await confirm.wait()
         if not confirm.confirmed:
-            await interaction.followup.send("Cancelled.", ephemeral=True)
+            await interaction.followup.send("❌ Cancelled.", ephemeral=True)
             return
 
         guild = interaction.guild
