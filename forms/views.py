@@ -181,7 +181,7 @@ class TicketCategoriesModal(discord.ui.Modal, title="Ticket Categories"):
 
 
 class WizardStep7View(_WizardStepView):
-    """Step 6: Enter ticket categories via modal."""
+    """Step 5: Enter ticket categories via modal."""
 
     @discord.ui.button(label="Enter Categories", style=discord.ButtonStyle.blurple)
     async def enter_categories(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -979,8 +979,20 @@ class ApplicationSettingsView(discord.ui.View):
             if confirm.confirmed:
                 await manager.delete_application(view.selected)
                 assignments = await self.config.guild(interaction.guild).application_assignments()
-                assignments.pop(view.selected, None)
+                removed = assignments.pop(view.selected, None)
                 await self.config.guild(interaction.guild).application_assignments.set(assignments)
+                # Clean up panel message if one was posted
+                if removed:
+                    channel_id = removed.get("channel_id")
+                    panel_msg_id = removed.get("panel_message_id")
+                    if channel_id and panel_msg_id:
+                        ch = interaction.guild.get_channel(channel_id)
+                        if ch:
+                            try:
+                                msg = await ch.fetch_message(panel_msg_id)
+                                await msg.delete()
+                            except Exception:
+                                pass
                 await interaction.followup.send("✅ Application deleted.", ephemeral=True)
 
     @discord.ui.button(label="📊 Manage Assignments", style=discord.ButtonStyle.blurple)
@@ -1228,7 +1240,6 @@ class _AssignmentManagementView(discord.ui.View):
     @discord.ui.button(label="🗑️ Remove Assignment", style=discord.ButtonStyle.red)
     async def remove(self, interaction: discord.Interaction, button: discord.ui.Button):
         confirm = ConfirmView()
-        app_name = self.assignment.get("name", self.slug)
         await interaction.response.send_message(
             f"Remove the **{self.slug}** assignment? The Apply button message will be deleted from the channel.",
             view=confirm, ephemeral=True,

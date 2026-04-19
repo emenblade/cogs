@@ -69,6 +69,10 @@ class ApplicationManager:
 
         questions = await self._run_question_builder(member, dm)
 
+        if not questions:
+            await dm.send("❌ No questions were added — application was not saved.")
+            return
+
         data = {
             "name": name,
             "slug": slug,
