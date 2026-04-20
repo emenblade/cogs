@@ -106,16 +106,26 @@ class TicketManager:
         transcript_file = transcript_dir / f"{channel.name}.txt"
         transcript_file.write_text(transcript_text, encoding="utf-8")
 
-        # Find the ticket opener from config
+        # Find the ticket opener and welcome message from config
         opener = None
+        ticket_msg_id = None
         all_member_data = await self.config.all_members(guild)
         for member_id_str, data in all_member_data.items():
             for ticket in data.get("open_tickets", []):
                 if ticket.get("channel_id") == channel.id:
                     opener = guild.get_member(int(member_id_str))
+                    ticket_msg_id = ticket.get("message_id")
                     break
             if opener:
                 break
+
+        # Remove action buttons from the welcome message before archiving
+        if ticket_msg_id:
+            try:
+                welcome_msg = await channel.fetch_message(ticket_msg_id)
+                await welcome_msg.edit(view=None)
+            except Exception:
+                pass
 
         # DM transcript to opener
         if opener:

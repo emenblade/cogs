@@ -341,8 +341,41 @@ class TicketCategoryView(discord.ui.View):
             await manager.create_ticket(interaction, category)
 
 
+class _AddMemberSelectView(discord.ui.View):
+    """Ephemeral view for adding a guild member to an open ticket channel."""
+
+    def __init__(self, channel: discord.TextChannel):
+        super().__init__(timeout=60)
+        self.channel = channel
+
+    @discord.ui.select(
+        cls=discord.ui.UserSelect,
+        placeholder="Search for a member to add…",
+    )
+    async def user_select(self, interaction: discord.Interaction, select: discord.ui.UserSelect):
+        user = select.values[0]
+        member = interaction.guild.get_member(user.id)
+        if member is None:
+            await interaction.response.send_message(
+                "⚠️ Could not find that member in this server.", ephemeral=True
+            )
+            return
+        if self.channel.overwrites_for(member).read_messages is True:
+            await interaction.response.send_message(
+                f"⚠️ {member.mention} already has access to this ticket.", ephemeral=True
+            )
+            return
+        await self.channel.set_permissions(member, read_messages=True, send_messages=True)
+        await self.channel.send(
+            f"👤 {member.mention} has been added to this ticket at the request of {interaction.user.mention}."
+        )
+        await interaction.response.send_message(
+            f"✅ {member.mention} has been added to the ticket.", ephemeral=True
+        )
+
+
 class CloseTicketView(discord.ui.View):
-    """Persistent view posted in each ticket channel. Only staff can close."""
+    """Persistent view posted in each ticket channel. Only staff can add members or close."""
 
     def __init__(self, config: Config, bot, channel_id: int, staff_role_id: int | None):
         super().__init__(timeout=None)
@@ -350,14 +383,33 @@ class CloseTicketView(discord.ui.View):
         self.bot = bot
         self.channel_id = channel_id
         self.staff_role_id = staff_role_id
-        # Make custom_id unique per channel so Discord can distinguish buttons
-        if self.children:
-            self.children[0].custom_id = f"forms:close_ticket:{channel_id}"
+        # Make custom_ids unique per channel so Discord can distinguish buttons across tickets
+        for child in self.children:
+            if getattr(child, "custom_id", None) == "forms:add_member:_":
+                child.custom_id = f"forms:add_member:{channel_id}"
+            elif getattr(child, "custom_id", None) == "forms:close_ticket:_":
+                child.custom_id = f"forms:close_ticket:{channel_id}"
+
+    @discord.ui.button(
+        label="👤 Add Member",
+        style=discord.ButtonStyle.grey,
+        custom_id="forms:add_member:_",
+    )
+    async def add_member(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not check_staff_role(interaction, self.staff_role_id):
+            await interaction.response.send_message(
+                "⚠️ Only staff can add members to tickets.", ephemeral=True
+            )
+            return
+        view = _AddMemberSelectView(interaction.channel)
+        await interaction.response.send_message(
+            "Select a member to add to this ticket:", view=view, ephemeral=True
+        )
 
     @discord.ui.button(
         label="🔒 Close Ticket",
         style=discord.ButtonStyle.red,
-        custom_id="forms:close_ticket",
+        custom_id="forms:close_ticket:_",
     )
     async def close_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not check_staff_role(interaction, self.staff_role_id):
