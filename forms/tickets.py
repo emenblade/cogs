@@ -28,6 +28,20 @@ class TicketManager:
         guild = interaction.guild
         guild_conf = self.config.guild(guild)
 
+        # Re-check open ticket limit (guard against race between panel check and here)
+        max_open = await guild_conf.ticket_max_open()
+        open_tickets_now = await self.config.member(interaction.user).open_tickets()
+        if len(open_tickets_now) >= max_open:
+            try:
+                await interaction.followup.send(
+                    f"⚠️ You already have {len(open_tickets_now)} open ticket(s). "
+                    "Please wait for them to be resolved before opening a new one.",
+                    ephemeral=True,
+                )
+            except Exception:
+                pass
+            return
+
         # Atomic counter increment
         async with self._get_lock(guild.id):
             counter = await guild_conf.ticket_counter()
@@ -38,7 +52,6 @@ class TicketManager:
         category_id = await guild_conf.ticket_category()
         category = guild.get_channel(category_id)
         if category is None:
-            # Can't create ticket — no category configured or it was deleted
             try:
                 await interaction.followup.send(
                     "⚠️ Ticket category not found. Please ask staff to re-run setup.",
@@ -47,8 +60,9 @@ class TicketManager:
             except Exception:
                 pass
             return
-        safe_name = sanitize_channel_name(interaction.user.display_name)
-        channel_name = f"{safe_name}-{counter:04d}"
+        safe_category = sanitize_channel_name(category_name, max_length=40, fallback="ticket")
+        safe_user = sanitize_channel_name(interaction.user.display_name, max_length=20)
+        channel_name = f"{safe_category}-{safe_user}-{counter:04d}"
 
         overwrites = dict(category.overwrites) if category else {}
         overwrites[interaction.user] = discord.PermissionOverwrite(
@@ -84,6 +98,7 @@ class TicketManager:
             "channel_id": channel.id,
             "message_id": msg.id,
             "counter": counter,
+            "category": category_name,
         }
         async with self.config.member(interaction.user).open_tickets() as tickets:
             tickets.append(ticket_entry)
@@ -106,17 +121,23 @@ class TicketManager:
         transcript_file = transcript_dir / f"{channel.name}.txt"
         transcript_file.write_text(transcript_text, encoding="utf-8")
 
-        # Find the ticket opener and welcome message from config
+        # Find the ticket opener and metadata from config
         opener = None
+        opener_id = None
         ticket_msg_id = None
+        ticket_category = None
+        found_ticket = False
         all_member_data = await self.config.all_members(guild)
         for member_id_str, data in all_member_data.items():
             for ticket in data.get("open_tickets", []):
                 if ticket.get("channel_id") == channel.id:
-                    opener = guild.get_member(int(member_id_str))
+                    opener_id = int(member_id_str)
+                    opener = guild.get_member(opener_id)
                     ticket_msg_id = ticket.get("message_id")
+                    ticket_category = ticket.get("category")
+                    found_ticket = True
                     break
-            if opener:
+            if found_ticket:
                 break
 
         # Remove action buttons from the welcome message before archiving
@@ -140,28 +161,44 @@ class TicketManager:
 
         # Post to staff forum
         forum_id = await guild_conf.ticket_forum()
-        ticket_tag_id = await guild_conf.ticket_tag_id()
         forum = guild.get_channel(forum_id) if forum_id else None
         if forum and isinstance(forum, discord.ForumChannel):
-            tags = [t for t in forum.available_tags if t.id == ticket_tag_id]
-            body = transcript_text[:4000] if transcript_text else "(empty)"
+            # Find or create a forum tag matching the ticket category
+            tags = []
+            if ticket_category:
+                existing_tags = {t.name.lower(): t for t in forum.available_tags}
+                tag = existing_tags.get(ticket_category.lower())
+                if tag is None:
+                    try:
+                        tag = await forum.create_tag(name=ticket_category[:20])
+                    except Exception:
+                        tag = None
+                if tag:
+                    tags = [tag]
+
+            body = transcript_text[:2000] if transcript_text else "(empty)"
             thread, _first_msg = await forum.create_thread(
                 name=channel.name,
                 content=body,
                 applied_tags=tags,
+                allowed_mentions=discord.AllowedMentions.none(),
             )
-            if len(transcript_text) > 4000:
+            if len(transcript_text) > 2000:
                 fp = io.BytesIO(transcript_text.encode("utf-8"))
                 await thread.send(
-                    content="Full transcript attached (message too long to inline):",
+                    content="Full transcript attached:",
                     file=discord.File(fp, filename=f"{channel.name}.txt"),
                 )
             await thread.edit(archived=True, locked=True)
 
-        # Remove from opener's open_tickets
-        if opener:
-            async with self.config.member(opener).open_tickets() as tickets:
-                tickets[:] = [t for t in tickets if t.get("channel_id") != channel.id]
+        # Remove from opener's open_tickets (handles member having left the guild)
+        if opener_id:
+            if opener:
+                async with self.config.member(opener).open_tickets() as tickets:
+                    tickets[:] = [t for t in tickets if t.get("channel_id") != channel.id]
+            else:
+                async with self.config.member_from_ids(guild.id, opener_id).open_tickets() as tickets:
+                    tickets[:] = [t for t in tickets if t.get("channel_id") != channel.id]
 
         # Delete the channel
         await channel.delete(reason="Ticket closed")
@@ -169,6 +206,17 @@ class TicketManager:
     async def post_panel(self, channel: discord.TextChannel) -> discord.Message:
         """Post (or re-post) the persistent ticket panel embed in the given channel."""
         from .views import TicketPanelView
+        guild_conf = self.config.guild(channel.guild)
+
+        # Delete the previous panel if it exists in this channel
+        old_msg_id = await guild_conf.ticket_panel_message()
+        if old_msg_id:
+            try:
+                old_msg = await channel.fetch_message(old_msg_id)
+                await old_msg.delete()
+            except Exception:
+                pass
+
         embed = discord.Embed(
             title="🎫 Support Tickets",
             description="Click the button below to open a support ticket. "
@@ -177,5 +225,5 @@ class TicketManager:
         )
         view = TicketPanelView(self.config, self.bot)
         msg = await channel.send(embed=embed, view=view)
-        await self.config.guild(channel.guild).ticket_panel_message.set(msg.id)
+        await guild_conf.ticket_panel_message.set(msg.id)
         return msg

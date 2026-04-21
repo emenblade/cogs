@@ -21,25 +21,27 @@ def parse_question(text: str) -> tuple[str, dict | None]:
     return display, {"type": rule_type, "min": int(m.group(1))}
 
 
-def sanitize_channel_name(name: str) -> str:
-    """Return a Discord-safe channel name (lowercase, hyphens, max 80 chars)."""
-    name = name.lower()
-    name = name.replace(" ", "-")
+def sanitize_channel_name(name: str, max_length: int = 80, fallback: str = "user") -> str:
+    """Return a Discord-safe channel name segment (lowercase, hyphens, truncated)."""
+    name = name.lower().replace(" ", "-")
     name = re.sub(r"[^a-z0-9\-]", "", name)
     name = re.sub(r"-{2,}", "-", name)
-    name = name.strip("-")
-    name = name[:80]
-    return name or "user"
+    name = name.strip("-")[:max_length]
+    return name or fallback
 
 
 def build_transcript(messages: list[discord.Message]) -> str:
     """Build a plain-text transcript from a list of messages, oldest first."""
     lines = []
     for msg in messages:
-        if msg.author.bot:
-            continue
         ts = msg.created_at.strftime("%Y-%m-%d %H:%M UTC")
-        lines.append(f"[{ts}] {msg.author.display_name}: {msg.content}")
+        author = f"[BOT] {msg.author.display_name}" if msg.author.bot else msg.author.display_name
+        content = msg.content
+        if not content and msg.embeds:
+            titles = [e.title for e in msg.embeds if e.title]
+            content = f"[embed: {', '.join(titles)}]" if titles else "[embed]"
+        if content:
+            lines.append(f"[{ts}] {author}: {content}")
         for att in msg.attachments:
             lines.append(f"  [Attachment: {att.filename} — {att.url}]")
     return "\n".join(lines)

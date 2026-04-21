@@ -332,9 +332,8 @@ class TicketCategoryView(discord.ui.View):
             super().__init__(placeholder="Select a category…", options=options)
 
         async def callback(self, interaction: discord.Interaction):
-            from .tickets import TicketManager
             category = self.values[0]
-            manager = TicketManager(interaction.client, interaction.client.cogs["Forms"].config)
+            manager = interaction.client.cogs["Forms"].tickets
             await interaction.response.edit_message(
                 content="Creating your ticket…", view=None
             )
@@ -417,8 +416,7 @@ class CloseTicketView(discord.ui.View):
                 "⚠️ Only staff can close tickets.", ephemeral=True
             )
             return
-        from .tickets import TicketManager
-        manager = TicketManager(interaction.client, self.config)
+        manager = interaction.client.cogs["Forms"].tickets
         await interaction.response.defer()
         await manager.close_ticket(interaction.channel, interaction.guild)
 
