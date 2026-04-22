@@ -597,9 +597,11 @@ class DenyReasonModal(discord.ui.Modal, title="Deny Application"):
         )
 
         # Update forum thread tags: Needs Review → Denied
-        if isinstance(self.thread, discord.Thread) and isinstance(self.thread.parent, discord.ForumChannel):
+        forum_id = assignments.get(self.slug, {}).get("review_forum_id") if self.slug in assignments else None
+        forum = guild.get_channel(forum_id) if forum_id else None
+        if forum and isinstance(forum, discord.ForumChannel):
             try:
-                denied_tag = await get_or_create_forum_tag(self.thread.parent, "Denied")
+                denied_tag = await get_or_create_forum_tag(forum, "Denied")
                 new_tags = [t for t in self.thread.applied_tags if t.name != "Needs Review"]
                 if denied_tag:
                     new_tags.append(denied_tag)
@@ -681,10 +683,12 @@ class ReviewView(discord.ui.View):
         await interaction.channel.send(f"✅ **Approved** by {interaction.user.mention}")
 
         # Update forum thread tags: Needs Review → Approved
-        thread = interaction.channel
-        if isinstance(thread, discord.Thread) and isinstance(thread.parent, discord.ForumChannel):
+        forum_id = app_conf.get("review_forum_id")
+        forum = guild.get_channel(forum_id) if forum_id else None
+        if forum and isinstance(forum, discord.ForumChannel):
             try:
-                approved_tag = await get_or_create_forum_tag(thread.parent, "Approved")
+                approved_tag = await get_or_create_forum_tag(forum, "Approved")
+                thread = interaction.channel
                 new_tags = [t for t in thread.applied_tags if t.name != "Needs Review"]
                 if approved_tag:
                     new_tags.append(approved_tag)
@@ -764,8 +768,15 @@ class PostReviewView(discord.ui.View):
             return
         await interaction.response.defer()
         thread = interaction.channel
+        guild = interaction.guild or self.bot.get_guild(self.guild_id)
 
-        # Derive verdict from current tags
+        # Fetch fresh thread data so applied_tags reflects the current state
+        try:
+            thread = await self.bot.fetch_channel(thread.id)
+        except Exception:
+            pass
+
+        # Derive verdict from tags set during approve/deny
         verdict = "Unknown"
         for tag in thread.applied_tags:
             if tag.name == "Approved":
@@ -783,17 +794,22 @@ class PostReviewView(discord.ui.View):
             username = str(self.user_id)
         new_name = f"CLOSED-{username}-{verdict}"[:100]
 
-        # Add Closed tag, keep existing verdict tag
+        # Add Closed tag alongside the verdict tag
         new_tags = list(thread.applied_tags)
-        if isinstance(thread.parent, discord.ForumChannel):
+        assignments = await self.config.guild(guild).application_assignments()
+        forum_id = assignments.get(self.slug, {}).get("review_forum_id")
+        forum = guild.get_channel(forum_id) if forum_id and guild else None
+        if forum and isinstance(forum, discord.ForumChannel):
             try:
-                closed_tag = await get_or_create_forum_tag(thread.parent, "Closed")
+                closed_tag = await get_or_create_forum_tag(forum, "Closed")
                 if closed_tag and not any(t.id == closed_tag.id for t in new_tags):
                     new_tags.append(closed_tag)
             except Exception:
                 pass
 
-        await thread.edit(name=new_name, applied_tags=new_tags, archived=True, locked=True)
+        # Update name and tags first, then archive — Discord rejects combining them
+        await thread.edit(name=new_name, applied_tags=new_tags)
+        await thread.edit(archived=True, locked=True)
 
 
 class EditTicketCategoriesModal(discord.ui.Modal, title="Edit Ticket Categories"):
