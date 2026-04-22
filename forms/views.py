@@ -796,10 +796,13 @@ class PostReviewView(discord.ui.View):
 
         # Add Closed tag alongside the verdict tag
         new_tags = list(thread.applied_tags)
-        assignments = await self.config.guild(guild).application_assignments()
-        forum_id = assignments.get(self.slug, {}).get("review_forum_id")
-        forum = guild.get_channel(forum_id) if forum_id and guild else None
-        if forum and isinstance(forum, discord.ForumChannel):
+        forum = self.bot.get_channel(thread.parent_id)
+        if forum is None:
+            try:
+                forum = await self.bot.fetch_channel(thread.parent_id)
+            except Exception:
+                forum = None
+        if forum:
             try:
                 closed_tag = await get_or_create_forum_tag(forum, "Closed")
                 if closed_tag and not any(t.id == closed_tag.id for t in new_tags):
