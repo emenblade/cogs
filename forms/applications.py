@@ -7,7 +7,7 @@ import discord
 from redbot.core import Config
 from redbot.core.bot import Red
 from pathlib import Path
-from .utils import parse_question
+from .utils import parse_question, get_or_create_forum_tag
 
 
 _MIN_RULE_HINT = (
@@ -350,7 +350,8 @@ class ApplicationManager:
             lines.append("")
         transcript = "\n".join(lines)
 
-        tags = []
+        needs_review_tag = await get_or_create_forum_tag(forum, "Needs Review")
+        tags = [needs_review_tag] if needs_review_tag else []
         view = ReviewView(self.config, self.bot, app["slug"], user.id, guild.id)
 
         suffix = "\n…(see attachment)"

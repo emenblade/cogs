@@ -2,7 +2,7 @@
 from __future__ import annotations
 import discord
 from redbot.core import Config
-from .utils import check_staff_role
+from .utils import check_staff_role, get_or_create_forum_tag
 
 
 async def _check_reviewer(interaction: discord.Interaction, config: Config, slug: str) -> bool:
@@ -596,6 +596,17 @@ class DenyReasonModal(discord.ui.Modal, title="Deny Application"):
             f"❌ **Denied** by {interaction.user.mention} — **Reason:** {self.reason.value}{cooldown_note}"
         )
 
+        # Update forum thread tags: Needs Review → Denied
+        if isinstance(self.thread, discord.Thread) and isinstance(self.thread.parent, discord.ForumChannel):
+            try:
+                denied_tag = await get_or_create_forum_tag(self.thread.parent, "Denied")
+                new_tags = [t for t in self.thread.applied_tags if t.name != "Needs Review"]
+                if denied_tag:
+                    new_tags.append(denied_tag)
+                await self.thread.edit(applied_tags=new_tags)
+            except Exception:
+                pass
+
         # Edit original review message to replace buttons with PostReviewView
         post_view = PostReviewView(self.config, self.bot, self.slug, self.user_id, self.guild_id)
         try:
@@ -669,6 +680,18 @@ class ReviewView(discord.ui.View):
         await self.config.guild(guild).application_assignments.set(assignments)
         await interaction.channel.send(f"✅ **Approved** by {interaction.user.mention}")
 
+        # Update forum thread tags: Needs Review → Approved
+        thread = interaction.channel
+        if isinstance(thread, discord.Thread) and isinstance(thread.parent, discord.ForumChannel):
+            try:
+                approved_tag = await get_or_create_forum_tag(thread.parent, "Approved")
+                new_tags = [t for t in thread.applied_tags if t.name != "Needs Review"]
+                if approved_tag:
+                    new_tags.append(approved_tag)
+                await thread.edit(applied_tags=new_tags)
+            except Exception:
+                pass
+
         # Replace buttons with post-decision view
         post_view = PostReviewView(self.config, self.bot, self.slug, self.user_id, self.guild_id)
         await interaction.message.edit(view=post_view)
@@ -740,7 +763,37 @@ class PostReviewView(discord.ui.View):
             )
             return
         await interaction.response.defer()
-        await interaction.channel.edit(archived=True, locked=True)
+        thread = interaction.channel
+
+        # Derive verdict from current tags
+        verdict = "Unknown"
+        for tag in thread.applied_tags:
+            if tag.name == "Approved":
+                verdict = "Approved"
+                break
+            elif tag.name == "Denied":
+                verdict = "Denied"
+                break
+
+        # Build closed thread name
+        try:
+            user = await self.bot.fetch_user(self.user_id)
+            username = user.name
+        except Exception:
+            username = str(self.user_id)
+        new_name = f"CLOSED-{username}-{verdict}"[:100]
+
+        # Add Closed tag, keep existing verdict tag
+        new_tags = list(thread.applied_tags)
+        if isinstance(thread.parent, discord.ForumChannel):
+            try:
+                closed_tag = await get_or_create_forum_tag(thread.parent, "Closed")
+                if closed_tag and not any(t.id == closed_tag.id for t in new_tags):
+                    new_tags.append(closed_tag)
+            except Exception:
+                pass
+
+        await thread.edit(name=new_name, applied_tags=new_tags, archived=True, locked=True)
 
 
 class EditTicketCategoriesModal(discord.ui.Modal, title="Edit Ticket Categories"):

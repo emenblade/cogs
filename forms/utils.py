@@ -61,6 +61,19 @@ async def send_or_attach(
         await destination.send(file=discord.File(fp, filename=filename))
 
 
+async def get_or_create_forum_tag(
+    forum: discord.ForumChannel, name: str
+) -> discord.ForumTag | None:
+    """Return a forum tag by name, creating it if it doesn't exist yet."""
+    try:
+        existing = {t.name: t for t in forum.available_tags}
+        if name in existing:
+            return existing[name]
+        return await forum.create_tag(name=name)
+    except Exception:
+        return None
+
+
 def check_staff_role(interaction: discord.Interaction, role_id: int | None) -> bool:
     """Return True if the interaction member has the given role ID."""
     if role_id is None:
