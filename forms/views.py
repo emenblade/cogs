@@ -799,8 +799,13 @@ class PostReviewView(discord.ui.View):
         forum = await self.bot.fetch_channel(thread.parent_id)
         closed_tag = next((t for t in forum.available_tags if t.name == "Closed"), None)
         if closed_tag is None:
-            closed_tag = await forum.create_tag(name="Closed")
-        if not any(t.id == closed_tag.id for t in new_tags):
+            try:
+                closed_tag = await forum.create_tag(name="Closed")
+            except discord.HTTPException:
+                # Tag already exists but wasn't in the fetched available_tags — re-fetch
+                forum = await self.bot.fetch_channel(thread.parent_id)
+                closed_tag = next((t for t in forum.available_tags if t.name == "Closed"), None)
+        if closed_tag and not any(t.id == closed_tag.id for t in new_tags):
             new_tags.append(closed_tag)
 
         # Update name and tags first, then archive — Discord rejects combining them
