@@ -794,21 +794,14 @@ class PostReviewView(discord.ui.View):
             username = str(self.user_id)
         new_name = f"CLOSED-{username}-{verdict}"[:100]
 
-        # Add Closed tag alongside the verdict tag
+        # Add Closed tag alongside the verdict tag — fetch forum fresh, no cache
         new_tags = list(thread.applied_tags)
-        forum = self.bot.get_channel(thread.parent_id)
-        if forum is None:
-            try:
-                forum = await self.bot.fetch_channel(thread.parent_id)
-            except Exception:
-                forum = None
-        if forum:
-            try:
-                closed_tag = await get_or_create_forum_tag(forum, "Closed")
-                if closed_tag and not any(t.id == closed_tag.id for t in new_tags):
-                    new_tags.append(closed_tag)
-            except Exception:
-                pass
+        forum = await self.bot.fetch_channel(thread.parent_id)
+        closed_tag = next((t for t in forum.available_tags if t.name == "Closed"), None)
+        if closed_tag is None:
+            closed_tag = await forum.create_tag(name="Closed")
+        if not any(t.id == closed_tag.id for t in new_tags):
+            new_tags.append(closed_tag)
 
         # Update name and tags first, then archive — Discord rejects combining them
         await thread.edit(name=new_name, applied_tags=new_tags)
