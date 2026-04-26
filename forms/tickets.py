@@ -115,6 +115,15 @@ class TicketManager:
         messages = [m async for m in channel.history(limit=None, oldest_first=True)]
         transcript_text = build_transcript(messages)
 
+        # Download attachments before the channel is deleted
+        saved_attachments: list[tuple[str, bytes]] = []
+        for msg in messages:
+            for att in msg.attachments:
+                try:
+                    saved_attachments.append((att.filename, await att.read()))
+                except Exception:
+                    pass
+
         # Save transcript to disk
         transcript_dir = cog_data_path(self.bot.cogs["Forms"]) / "transcripts"
         transcript_dir.mkdir(parents=True, exist_ok=True)
@@ -189,6 +198,13 @@ class TicketManager:
                     content="Full transcript attached:",
                     file=discord.File(fp, filename=f"{channel.name}.txt"),
                 )
+            if saved_attachments:
+                for i in range(0, len(saved_attachments), 10):
+                    batch = saved_attachments[i:i + 10]
+                    await thread.send(
+                        content="📎 Attachments:" if i == 0 else None,
+                        files=[discord.File(io.BytesIO(data), filename=name) for name, data in batch],
+                    )
             await thread.edit(archived=True, locked=True)
 
         # Remove from opener's open_tickets (handles member having left the guild)
