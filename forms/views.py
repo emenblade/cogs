@@ -388,6 +388,8 @@ class CloseTicketView(discord.ui.View):
                 child.custom_id = f"forms:add_member:{channel_id}"
             elif getattr(child, "custom_id", None) == "forms:close_ticket:_":
                 child.custom_id = f"forms:close_ticket:{channel_id}"
+            elif getattr(child, "custom_id", None) == "forms:move_ticket:_":
+                child.custom_id = f"forms:move_ticket:{channel_id}"
 
     @discord.ui.button(
         label="👤 Add Member",
@@ -404,6 +406,42 @@ class CloseTicketView(discord.ui.View):
         await interaction.response.send_message(
             "Select a member to add to this ticket:", view=view, ephemeral=True
         )
+
+    @discord.ui.button(
+        label="📂 Move Ticket",
+        style=discord.ButtonStyle.grey,
+        custom_id="forms:move_ticket:_",
+    )
+    async def move_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not check_staff_role(interaction, self.staff_role_id):
+            await interaction.response.send_message(
+                "⚠️ Only staff can move tickets.", ephemeral=True
+            )
+            return
+        move_cats = await self.config.guild(interaction.guild).ticket_move_categories()
+        if not move_cats:
+            await interaction.response.send_message(
+                "⚠️ No move destinations configured. Ask an admin to add some in Ticket Settings.",
+                ephemeral=True,
+            )
+            return
+        if len(move_cats) == 1:
+            await interaction.response.defer(ephemeral=True)
+            dest = move_cats[0]
+            category = interaction.guild.get_channel(dest["category_id"])
+            if category is None:
+                await interaction.followup.send("⚠️ Destination category not found.", ephemeral=True)
+                return
+            await interaction.channel.edit(category=category)
+            await interaction.channel.send(
+                f"📂 Ticket moved to **{dest['name']}** by {interaction.user.mention}."
+            )
+            await interaction.followup.send("✅ Ticket moved.", ephemeral=True)
+        else:
+            view = _MoveTicketSelectView(self.config, move_cats, interaction.channel)
+            await interaction.response.send_message(
+                "Select a destination for this ticket:", view=view, ephemeral=True
+            )
 
     @discord.ui.button(
         label="🔒 Close Ticket",
@@ -426,6 +464,35 @@ class CloseTicketView(discord.ui.View):
         await interaction.message.edit(view=processing_view)
         manager = interaction.client.cogs["Forms"].tickets
         await manager.close_ticket(interaction.channel, interaction.guild)
+
+
+class _MoveTicketSelectView(discord.ui.View):
+    """Ephemeral dropdown shown when multiple move destinations are configured."""
+
+    def __init__(self, config: Config, move_cats: list, channel):
+        super().__init__(timeout=60)
+        self.config = config
+        self.move_cats = move_cats
+        self.channel = channel
+        options = [discord.SelectOption(label=c["name"], value=str(i)) for i, c in enumerate(move_cats)]
+        select = discord.ui.Select(options=options, placeholder="Select destination…")
+        select.callback = self._callback
+        self.add_item(select)
+
+    async def _callback(self, interaction: discord.Interaction):
+        idx = int(interaction.data["values"][0])
+        dest = self.move_cats[idx]
+        await interaction.response.defer(ephemeral=True)
+        category = interaction.guild.get_channel(dest["category_id"])
+        if category is None:
+            await interaction.followup.send("⚠️ Destination category not found.", ephemeral=True)
+            return
+        await self.channel.edit(category=category)
+        await self.channel.send(
+            f"📂 Ticket moved to **{dest['name']}** by {interaction.user.mention}."
+        )
+        await interaction.followup.send("✅ Ticket moved.", ephemeral=True)
+        self.stop()
 
 
 class CreateApplicationModal(discord.ui.Modal, title="Create Application"):
@@ -885,6 +952,116 @@ class TicketSettingsView(discord.ui.View):
         manager = interaction.client.cogs["Forms"].tickets
         await manager.post_panel(channel)
         await interaction.response.send_message("✅ Ticket panel re-posted.", ephemeral=True)
+
+    @discord.ui.button(label="📂 Move Categories", style=discord.ButtonStyle.grey)
+    async def move_categories(self, interaction: discord.Interaction, button: discord.ui.Button):
+        move_cats = await self.config.guild(interaction.guild).ticket_move_categories()
+        embed = discord.Embed(title="📂 Move Ticket Destinations", color=discord.Color.blurple())
+        if move_cats:
+            embed.description = "\n".join(
+                f"• **{c['name']}** — <#{c['category_id']}>" for c in move_cats
+            )
+        else:
+            embed.description = "No destinations configured yet."
+        view = _MoveCategoriesManageView(self.config, move_cats)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+
+class _MoveCategoriesManageView(discord.ui.View):
+    """Add or remove move-ticket destinations."""
+
+    def __init__(self, config: Config, move_cats: list):
+        super().__init__(timeout=120)
+        self.config = config
+        self.move_cats = move_cats
+
+    @discord.ui.button(label="➕ Add Destination", style=discord.ButtonStyle.green)
+    async def add(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(_DestCategoryNameModal(self.config, self.move_cats))
+
+    @discord.ui.button(label="🗑️ Remove Destination", style=discord.ButtonStyle.red)
+    async def remove(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not self.move_cats:
+            await interaction.response.send_message("⚠️ No destinations to remove.", ephemeral=True)
+            return
+        options = [
+            discord.SelectOption(label=c["name"], value=str(i))
+            for i, c in enumerate(self.move_cats)
+        ]
+        view = _RemoveDestSelectView(self.config, self.move_cats)
+        await interaction.response.send_message(
+            "Select a destination to remove:", view=view, ephemeral=True
+        )
+
+
+class _DestCategoryNameModal(discord.ui.Modal, title="Add Move Destination"):
+    name = discord.ui.TextInput(
+        label="Destination name",
+        placeholder="e.g. Long Term",
+        max_length=50,
+    )
+
+    def __init__(self, config: Config, move_cats: list):
+        super().__init__()
+        self.config = config
+        self.move_cats = move_cats
+
+    async def on_submit(self, interaction: discord.Interaction):
+        name = self.name.value.strip()
+        view = _DestCategorySelectView(self.config, self.move_cats, name)
+        await interaction.response.send_message(
+            f"Select the Discord **category** for **{name}**:", view=view, ephemeral=True
+        )
+
+
+class _DestCategorySelectView(discord.ui.View):
+    """Pick the Discord category channel for a new move destination."""
+
+    def __init__(self, config: Config, move_cats: list, dest_name: str):
+        super().__init__(timeout=120)
+        self.config = config
+        self.move_cats = move_cats
+        self.dest_name = dest_name
+
+    @discord.ui.select(
+        cls=discord.ui.ChannelSelect,
+        placeholder="Select a category…",
+        channel_types=[discord.ChannelType.category],
+    )
+    async def category_select(self, interaction: discord.Interaction, select: discord.ui.ChannelSelect):
+        category_id = select.values[0].id
+        new_cats = list(self.move_cats) + [{"name": self.dest_name, "category_id": category_id}]
+        await self.config.guild(interaction.guild).ticket_move_categories.set(new_cats)
+        await interaction.response.send_message(
+            f"✅ **{self.dest_name}** added as a move destination.", ephemeral=True
+        )
+        self.stop()
+
+
+class _RemoveDestSelectView(discord.ui.View):
+    """Pick a destination to remove from the move list."""
+
+    def __init__(self, config: Config, move_cats: list):
+        super().__init__(timeout=60)
+        self.config = config
+        self.move_cats = move_cats
+        options = [
+            discord.SelectOption(label=c["name"], value=str(i))
+            for i, c in enumerate(move_cats)
+        ]
+        select = discord.ui.Select(options=options, placeholder="Select destination to remove…")
+        select.callback = self._callback
+        self.add_item(select)
+
+    async def _callback(self, interaction: discord.Interaction):
+        idx = int(interaction.data["values"][0])
+        removed_name = self.move_cats[idx]["name"]
+        new_cats = [c for i, c in enumerate(self.move_cats) if i != idx]
+        await self.config.guild(interaction.guild).ticket_move_categories.set(new_cats)
+        await interaction.response.send_message(
+            f"✅ **{removed_name}** removed.", ephemeral=True
+        )
+        self.stop()
 
 
 class _SingleSelectView(discord.ui.View):

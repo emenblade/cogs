@@ -34,6 +34,7 @@ class Forms(commands.Cog):
             ticket_tag_id=None,
             application_tag_id=None,
             application_assignments={},
+            ticket_move_categories=[],  # list of {"name": str, "category_id": int}
         )
         self.config.register_member(
             open_tickets=[],  # list of {"channel_id": int, "message_id": int, "counter": int}
