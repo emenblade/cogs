@@ -416,8 +416,15 @@ class CloseTicketView(discord.ui.View):
                 "⚠️ Only staff can close tickets.", ephemeral=True
             )
             return
-        manager = interaction.client.cogs["Forms"].tickets
         await interaction.response.defer()
+        processing_view = discord.ui.View(timeout=None)
+        processing_view.add_item(discord.ui.Button(
+            label="⏳ Closing ticket, please wait...",
+            style=discord.ButtonStyle.grey,
+            disabled=True,
+        ))
+        await interaction.message.edit(view=processing_view)
+        manager = interaction.client.cogs["Forms"].tickets
         await manager.close_ticket(interaction.channel, interaction.guild)
 
 
@@ -466,6 +473,8 @@ class ApplyView(discord.ui.View):
         from redbot.core.data_manager import cog_data_path
         import time
 
+        await interaction.response.defer(ephemeral=True)
+
         manager = ApplicationManager(
             interaction.client,
             self.config,
@@ -475,7 +484,7 @@ class ApplyView(discord.ui.View):
         # Check: already in progress?
         active = await self.config.user(interaction.user).active_application()
         if active is not None:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "⚠️ You already have an application in progress. Please complete it first.",
                 ephemeral=True,
             )
@@ -485,7 +494,7 @@ class ApplyView(discord.ui.View):
         assignments = await self.config.guild(interaction.guild).application_assignments()
         app_conf = assignments.get(self.slug, {})
         if str(interaction.user.id) in app_conf.get("active_reviews", {}):
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "⚠️ Your application is currently awaiting staff review. "
                 "Please be patient — this process can take a few days.",
                 ephemeral=True,
@@ -499,7 +508,7 @@ class ApplyView(discord.ui.View):
             if not any(r.id == required_role_id for r in member_roles):
                 role = interaction.guild.get_role(required_role_id)
                 role_name = role.name if role else "a required role"
-                await interaction.response.send_message(
+                await interaction.followup.send(
                     f"⚠️ You need the **{role_name}** role to apply for this.",
                     ephemeral=True,
                 )
@@ -512,7 +521,7 @@ class ApplyView(discord.ui.View):
             remaining = int(expiry - time.time())
             days, rem = divmod(remaining, 86400)
             hours = rem // 3600
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 f"⚠️ You can re-apply in {days}d {hours}h.", ephemeral=True
             )
             return
@@ -522,12 +531,12 @@ class ApplyView(discord.ui.View):
             dm = await interaction.user.create_dm()
             await dm.send("Starting your application…")
         except discord.Forbidden:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "⚠️ Please enable DMs from server members to apply.", ephemeral=True
             )
             return
 
-        await interaction.response.send_message(
+        await interaction.followup.send(
             "✅ Check your DMs! I've sent you the first question.", ephemeral=True
         )
         await manager.start_application(interaction.user, interaction.guild, self.slug, dm)
