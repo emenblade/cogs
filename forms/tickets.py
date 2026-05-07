@@ -42,29 +42,45 @@ class TicketManager:
                 pass
             return
 
-        # Atomic counter increment
-        async with self._get_lock(guild.id):
-            counter = await guild_conf.ticket_counter()
-            counter += 1
-            await guild_conf.ticket_counter.set(counter)
-
-        # Create channel
-        category_id = await guild_conf.ticket_category()
-        category = guild.get_channel(category_id)
-        if category is None:
+        # Look up per-category config before touching the counter
+        categories = await guild_conf.ticket_categories()
+        cat_conf = next(
+            (c for c in categories if isinstance(c, dict) and c.get("name") == category_name),
+            None,
+        )
+        if not cat_conf or not cat_conf.get("discord_category_id"):
             try:
                 await interaction.followup.send(
-                    "⚠️ Ticket category not found. Please ask staff to re-run setup.",
+                    "⚠️ This ticket category is not configured. Please ask staff to set it up.",
                     ephemeral=True,
                 )
             except Exception:
                 pass
             return
+
+        category = guild.get_channel(cat_conf["discord_category_id"])
+        if category is None:
+            try:
+                await interaction.followup.send(
+                    "⚠️ Ticket category channel not found. Please ask staff to re-configure it.",
+                    ephemeral=True,
+                )
+            except Exception:
+                pass
+            return
+
+        # Atomic counter increment (only after we know the category is valid)
+        async with self._get_lock(guild.id):
+            counter = await guild_conf.ticket_counter()
+            counter += 1
+            await guild_conf.ticket_counter.set(counter)
+
         safe_category = sanitize_channel_name(category_name, max_length=40, fallback="ticket")
         safe_user = sanitize_channel_name(interaction.user.display_name, max_length=20)
         channel_name = f"{safe_category}-{safe_user}-{counter:04d}"
 
-        overwrites = dict(category.overwrites) if category else {}
+        # Inherit the Discord category's overwrites (already has @everyone denied + roles allowed)
+        overwrites = dict(category.overwrites)
         overwrites[interaction.user] = discord.PermissionOverwrite(
             read_messages=True, send_messages=True
         )
@@ -89,8 +105,13 @@ class TicketManager:
             ),
             color=discord.Color.blurple(),
         )
+        # Mention the ticket opener + all roles assigned to this category
+        role_ids = cat_conf.get("role_ids", [])
+        mentions = " ".join(
+            [interaction.user.mention] + [f"<@&{rid}>" for rid in role_ids]
+        )
         msg = await channel.send(
-            content=interaction.user.mention, embed=embed, view=view
+            content=mentions, embed=embed, view=view
         )
 
         # Persist ticket state for this member

@@ -238,17 +238,18 @@ class Forms(commands.Cog):
     async def forms_setup(self, ctx: commands.Context) -> None:
         """Run the first-time setup wizard (admins only).
 
-        Walks through a 5-step interactive wizard to configure tickets:
+        Walks through a 4-step interactive wizard to configure tickets:
 
         Step 1 — Ticket channel: where the Open Ticket panel button is posted.
-        Step 2 — Ticket category: the Discord category where private ticket channels are created.
-        Step 3 — Staff role: the role that can close tickets and access the settings panel.
-        Step 4 — Ticket forum: the forum channel where closed ticket transcripts are archived
+        Step 2 — Staff role: the role that can close tickets and access the settings panel.
+        Step 3 — Ticket forum: the forum channel where closed ticket transcripts are archived
                   (a TICKET tag is created automatically).
-        Step 5 — Categories & limits: ticket category names (one per line) and the max
-                  number of open tickets per user.
+        Step 4 — Max tickets: the per-user open ticket limit.
 
         Once the wizard completes, the Open Ticket panel is posted to the configured channel.
+        Add ticket categories afterwards via Forms Settings → Ticket Settings → Manage Categories.
+        Each category gets its own private Discord channel category and assigned roles.
+
         Re-running setup overwrites existing ticket settings — use `forms settings` for
         targeted changes. Application review forums are configured per-application via
         Assign to Channel in settings, not here.
@@ -257,7 +258,7 @@ class Forms(commands.Cog):
         """
         view = WizardStep1View(self.config, ctx.guild.id, self.bot)
         embed = discord.Embed(
-            title="Forms Setup — Step 1 of 5",
+            title="Forms Setup — Step 1 of 4",
             description="Select the **ticket channel** where the Open Ticket button will be posted.",
             color=discord.Color.blurple(),
         )

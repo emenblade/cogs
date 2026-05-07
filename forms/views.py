@@ -51,33 +51,6 @@ class WizardStep1View(_WizardStepView):
             return
         await self.config.guild_from_id(self.guild_id).ticket_channel.set(self._selected.id)
         self.stop()
-        await _send_wizard_step2(interaction, self.config, self.guild_id, self.bot)
-
-    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.red)
-    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
-        self.stop()
-        await interaction.response.edit_message(content="❌ Setup cancelled.", view=None, embed=None)
-
-
-class WizardStep2View(_WizardStepView):
-    """Step 2: Select ticket category."""
-
-    @discord.ui.select(
-        cls=discord.ui.ChannelSelect,
-        placeholder="Select the ticket category…",
-        channel_types=[discord.ChannelType.category],
-    )
-    async def channel_select(self, interaction: discord.Interaction, select: discord.ui.ChannelSelect):
-        self._selected = select.values[0]
-        await interaction.response.defer()
-
-    @discord.ui.button(label="Confirm", style=discord.ButtonStyle.green)
-    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if self._selected is None:
-            await interaction.response.send_message("⚠️ Please select a category first.", ephemeral=True)
-            return
-        await self.config.guild_from_id(self.guild_id).ticket_category.set(self._selected.id)
-        self.stop()
         await _send_wizard_step4(interaction, self.config, self.guild_id, self.bot)
 
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.red)
@@ -144,16 +117,9 @@ class WizardStep5View(_WizardStepView):
         await interaction.response.edit_message(content="❌ Setup cancelled.", view=None, embed=None)
 
 
-class TicketCategoriesModal(discord.ui.Modal, title="Ticket Categories"):
-    """Modal for entering ticket category names and max open tickets."""
+class TicketCategoriesModal(discord.ui.Modal, title="Max Open Tickets"):
+    """Wizard step 4: set the per-user open ticket limit."""
 
-    categories = discord.ui.TextInput(
-        label="Categories (one per line)",
-        style=discord.TextStyle.paragraph,
-        placeholder="General Support\nBug Report\nBilling",
-        required=True,
-        max_length=500,
-    )
     max_open = discord.ui.TextInput(
         label="Max open tickets per user",
         placeholder="3",
@@ -161,38 +127,28 @@ class TicketCategoriesModal(discord.ui.Modal, title="Ticket Categories"):
         max_length=2,
     )
 
-    def __init__(self, config: Config, guild_id: int, bot,
-                 existing_cats: list[str] | None = None, existing_max: int | None = None):
+    def __init__(self, config: Config, guild_id: int, bot, existing_max: int | None = None):
         super().__init__()
         self.config = config
         self.guild_id = guild_id
         self.bot = bot
-        if existing_cats:
-            self.categories.default = "\n".join(existing_cats)
         if existing_max is not None:
             self.max_open.default = str(existing_max)
 
     async def on_submit(self, interaction: discord.Interaction):
-        cats = [c.strip() for c in self.categories.value.splitlines() if c.strip()]
         max_open = max(1, int(self.max_open.value)) if self.max_open.value.strip().isdigit() else 3
-        await self.config.guild_from_id(self.guild_id).ticket_categories.set(cats)
         await self.config.guild_from_id(self.guild_id).ticket_max_open.set(max_open)
         await finish_wizard(interaction, self.config, self.guild_id, self.bot)
 
 
 class WizardStep7View(_WizardStepView):
-    """Step 5: Enter ticket categories via modal."""
+    """Step 4: Set max open tickets via modal."""
 
-    @discord.ui.button(label="Enter Categories", style=discord.ButtonStyle.blurple)
+    @discord.ui.button(label="Set Max Tickets", style=discord.ButtonStyle.blurple)
     async def enter_categories(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.stop()
-        existing_cats = await self.config.guild_from_id(self.guild_id).ticket_categories()
         existing_max = await self.config.guild_from_id(self.guild_id).ticket_max_open()
-        modal = TicketCategoriesModal(
-            self.config, self.guild_id, self.bot,
-            existing_cats=existing_cats or None,
-            existing_max=existing_max,
-        )
+        modal = TicketCategoriesModal(self.config, self.guild_id, self.bot, existing_max=existing_max)
         await interaction.response.send_modal(modal)
 
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.red)
@@ -208,20 +164,11 @@ async def _ensure_forum_tags(forum: discord.ForumChannel, config: Config, guild_
     await config.guild_from_id(guild_id).ticket_tag_id.set(ticket_tag.id)
 
 
-async def _send_wizard_step2(interaction: discord.Interaction, config: Config, guild_id: int, bot) -> None:
-    view = WizardStep2View(config, guild_id, bot)
-    embed = discord.Embed(
-        title="Forms Setup — Step 2 of 5",
-        description="Select the **category** where ticket channels will be created.",
-        color=discord.Color.blurple(),
-    )
-    await interaction.response.edit_message(embed=embed, view=view)
-
 
 async def _send_wizard_step4(interaction: discord.Interaction, config: Config, guild_id: int, bot) -> None:
     view = WizardStep4View(config, guild_id, bot)
     embed = discord.Embed(
-        title="Forms Setup — Step 3 of 5",
+        title="Forms Setup — Step 2 of 4",
         description="Select the **staff role** that can manage and close tickets.",
         color=discord.Color.blurple(),
     )
@@ -231,7 +178,7 @@ async def _send_wizard_step4(interaction: discord.Interaction, config: Config, g
 async def _send_wizard_step5(interaction: discord.Interaction, config: Config, guild_id: int, bot) -> None:
     view = WizardStep5View(config, guild_id, bot)
     embed = discord.Embed(
-        title="Forms Setup — Step 4 of 5",
+        title="Forms Setup — Step 3 of 4",
         description="Select the **forum channel** where closed ticket transcripts will be archived.",
         color=discord.Color.blurple(),
     )
@@ -241,10 +188,9 @@ async def _send_wizard_step5(interaction: discord.Interaction, config: Config, g
 async def _send_wizard_step7(interaction: discord.Interaction, config: Config, guild_id: int, bot) -> None:
     view = WizardStep7View(config, guild_id, bot)
     embed = discord.Embed(
-        title="Forms Setup — Step 5 of 5",
+        title="Forms Setup — Step 4 of 4",
         description=(
-            "Click **Enter Categories** to set your ticket category names (one per line) "
-            "and the max open tickets per user."
+            "Click **Set Max Tickets** to set the maximum number of open tickets per user."
         ),
         color=discord.Color.blurple(),
     )
@@ -272,7 +218,11 @@ async def finish_wizard(interaction: discord.Interaction, config: Config, guild_
     panel_view = TicketPanelView(config, bot)
     msg = await channel.send(embed=embed, view=panel_view)
     await config.guild_from_id(guild_id).ticket_panel_message.set(msg.id)
-    await interaction.followup.send("✅ Setup complete! Ticket panel posted.", ephemeral=True)
+    await interaction.followup.send(
+        "✅ Setup complete! Ticket panel posted.\n\n"
+        "Next: go to **Forms Settings → Ticket Settings → Manage Categories** to add your ticket categories.",
+        ephemeral=True,
+    )
 
 
 class TicketPanelView(discord.ui.View):
@@ -291,9 +241,13 @@ class TicketPanelView(discord.ui.View):
     async def open_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
         guild_conf = self.config.guild(interaction.guild)
 
-        # Category guard
+        # Category guard — only show categories that have a Discord category configured
         categories = await guild_conf.ticket_categories()
-        if not categories:
+        valid_cats = [
+            c for c in categories
+            if isinstance(c, dict) and c.get("discord_category_id")
+        ]
+        if not valid_cats:
             await interaction.response.send_message(
                 "⚠️ Tickets are not fully configured yet. Please contact staff.", ephemeral=True
             )
@@ -311,7 +265,7 @@ class TicketPanelView(discord.ui.View):
             return
 
         # Show category select
-        view = TicketCategoryView(self.config, self.bot, categories)
+        view = TicketCategoryView(self.config, self.bot, valid_cats)
         await interaction.response.send_message(
             "Please select a category for your ticket:", view=view, ephemeral=True
         )
@@ -320,11 +274,11 @@ class TicketPanelView(discord.ui.View):
 class TicketCategoryView(discord.ui.View):
     """Ephemeral category select shown after clicking Open Ticket."""
 
-    def __init__(self, config: Config, bot, categories: list[str]):
+    def __init__(self, config: Config, bot, categories: list[dict]):
         super().__init__(timeout=120)
         self.config = config
         self.bot = bot
-        options = [discord.SelectOption(label=c, value=c) for c in categories[:25]]
+        options = [discord.SelectOption(label=c["name"], value=c["name"]) for c in categories[:25]]
         self.add_item(self._CategorySelect(options))
 
     class _CategorySelect(discord.ui.Select):
@@ -889,21 +843,6 @@ class PostReviewView(discord.ui.View):
         await thread.edit(archived=True, locked=True)
 
 
-class EditTicketCategoriesModal(discord.ui.Modal, title="Edit Ticket Categories"):
-    categories = discord.ui.TextInput(
-        label="Categories (one per line)",
-        style=discord.TextStyle.paragraph,
-        placeholder="Bug Report\nPayment Issue\nGeneral Question",
-        max_length=500,
-    )
-
-    async def on_submit(self, interaction: discord.Interaction):
-        cats = [c.strip() for c in self.categories.value.splitlines() if c.strip()]
-        await interaction.client.cogs["Forms"].config.guild(interaction.guild).ticket_categories.set(cats)
-        await interaction.response.send_message(
-            f"✅ Categories updated: {', '.join(cats)}", ephemeral=True
-        )
-
 
 class MaxTicketsModal(discord.ui.Modal, title="Max Open Tickets"):
     value = discord.ui.TextInput(label="Max tickets per user", placeholder="3", max_length=2)
@@ -934,9 +873,13 @@ class TicketSettingsView(discord.ui.View):
             "Select the new ticket channel:", view=view, ephemeral=True
         )
 
-    @discord.ui.button(label="Edit Categories", style=discord.ButtonStyle.grey)
-    async def edit_categories(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(EditTicketCategoriesModal())
+    @discord.ui.button(label="📋 Manage Categories", style=discord.ButtonStyle.grey)
+    async def manage_categories(self, interaction: discord.Interaction, button: discord.ui.Button):
+        categories = await self.config.guild(interaction.guild).ticket_categories()
+        valid_cats = [c for c in categories if isinstance(c, dict)]
+        embed = _build_categories_embed(valid_cats, interaction.guild)
+        view = _ManageCategoriesView(self.config, self.bot, valid_cats)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
     @discord.ui.button(label="Set Max Tickets", style=discord.ButtonStyle.grey)
     async def set_max_tickets(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -1595,9 +1538,10 @@ class SettingsPanelView(discord.ui.View):
             value=f"<@&{staff_role_id}>" if staff_role_id else "Not set"
         )
         categories = await guild_conf.ticket_categories()
+        valid_cats = [c for c in categories if isinstance(c, dict) and c.get("discord_category_id")]
         embed.add_field(
             name="Categories",
-            value=", ".join(categories) or "None",
+            value=", ".join(c["name"] for c in valid_cats) or "None configured",
             inline=False
         )
         await interaction.response.edit_message(embed=embed, view=view)
@@ -1631,3 +1575,223 @@ class SettingsPanelView(discord.ui.View):
             embed.add_field(name="Assigned Applications", value="None", inline=False)
 
         await interaction.response.edit_message(embed=embed, view=view)
+
+
+# ---------------------------------------------------------------------------
+# Ticket category management
+# ---------------------------------------------------------------------------
+
+def _build_categories_embed(categories: list, guild: discord.Guild) -> discord.Embed:
+    embed = discord.Embed(title="📋 Ticket Categories", color=discord.Color.blurple())
+    if not categories:
+        embed.description = "No categories configured yet. Click **Add Category** to create one."
+        return embed
+    lines = []
+    for cat in categories:
+        name = cat.get("name", "?")
+        discord_cat_id = cat.get("discord_category_id")
+        cat_ch = guild.get_channel(discord_cat_id) if discord_cat_id else None
+        role_ids = cat.get("role_ids", [])
+        roles_str = " ".join(f"<@&{rid}>" for rid in role_ids) if role_ids else "*None*"
+        cat_str = cat_ch.name if cat_ch else "*(channel not found)*"
+        lines.append(f"**{name}**\nRoles: {roles_str}\nDiscord Category: {cat_str}")
+    embed.description = "\n\n".join(lines)
+    return embed
+
+
+class _CategoryNameModal(discord.ui.Modal, title="New Ticket Category"):
+    name = discord.ui.TextInput(
+        label="Category name",
+        placeholder="e.g. General Support",
+        max_length=50,
+    )
+
+    def __init__(self):
+        super().__init__()
+        self.result_name: str | None = None
+
+    async def on_submit(self, interaction: discord.Interaction):
+        self.result_name = self.name.value.strip()
+        await interaction.response.defer()
+
+
+class _CategoryRoleSelectView(discord.ui.View):
+    """Multi-role select for assigning roles to a ticket category."""
+
+    def __init__(self):
+        super().__init__(timeout=120)
+        self.selected_role_ids: list[int] = []
+
+    @discord.ui.select(
+        cls=discord.ui.RoleSelect,
+        placeholder="Select roles for this category…",
+        min_values=1,
+        max_values=10,
+    )
+    async def role_select(self, interaction: discord.Interaction, select: discord.ui.RoleSelect):
+        self.selected_role_ids = [r.id for r in select.values]
+        await interaction.response.defer()
+        self.stop()
+
+
+class _ManageCategoriesView(discord.ui.View):
+    """Add, edit, or delete ticket categories."""
+
+    def __init__(self, config: Config, bot, categories: list):
+        super().__init__(timeout=120)
+        self.config = config
+        self.bot = bot
+        self.categories = categories
+
+    @discord.ui.button(label="➕ Add Category", style=discord.ButtonStyle.green)
+    async def add(self, interaction: discord.Interaction, button: discord.ui.Button):
+        modal = _CategoryNameModal()
+        await interaction.response.send_modal(modal)
+        await modal.wait()
+        if not modal.result_name:
+            return
+
+        role_view = _CategoryRoleSelectView()
+        await interaction.followup.send(
+            f"Select the roles that will handle **{modal.result_name}** tickets.\n"
+            "Only these roles (plus the ticket opener) will be able to see the channel.",
+            view=role_view,
+            ephemeral=True,
+        )
+        await role_view.wait()
+        if not role_view.selected_role_ids:
+            await interaction.followup.send(
+                "❌ No roles selected — category not created.", ephemeral=True
+            )
+            return
+
+        guild = interaction.guild
+        overwrites = {
+            guild.default_role: discord.PermissionOverwrite(view_channel=False),
+            guild.me: discord.PermissionOverwrite(
+                view_channel=True, send_messages=True,
+                manage_channels=True, manage_permissions=True,
+            ),
+        }
+        for rid in role_view.selected_role_ids:
+            role = guild.get_role(rid)
+            if role:
+                overwrites[role] = discord.PermissionOverwrite(
+                    view_channel=True, send_messages=True, read_message_history=True
+                )
+
+        discord_cat = await guild.create_category(modal.result_name, overwrites=overwrites)
+
+        categories = await self.config.guild(guild).ticket_categories()
+        categories = [c for c in categories if isinstance(c, dict)]
+        categories.append({
+            "name": modal.result_name,
+            "discord_category_id": discord_cat.id,
+            "role_ids": role_view.selected_role_ids,
+        })
+        await self.config.guild(guild).ticket_categories.set(categories)
+        self.categories = categories
+
+        await interaction.followup.send(
+            f"✅ Category **{modal.result_name}** created with "
+            f"{len(role_view.selected_role_ids)} role(s). "
+            "Users can now select it when opening a ticket.",
+            ephemeral=True,
+        )
+
+    @discord.ui.button(label="✏️ Edit Category", style=discord.ButtonStyle.blurple)
+    async def edit(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not self.categories:
+            await interaction.response.send_message("⚠️ No categories to edit.", ephemeral=True)
+            return
+        options = [discord.SelectOption(label=c["name"], value=c["name"]) for c in self.categories]
+        select_view = _SingleSelectView(options, placeholder="Select category to edit…")
+        await interaction.response.send_message(
+            "Select a category to edit:", view=select_view, ephemeral=True
+        )
+        await select_view.wait()
+        if not select_view.selected:
+            return
+
+        cat_name = select_view.selected
+        role_view = _CategoryRoleSelectView()
+        await interaction.followup.send(
+            f"Select the new roles for **{cat_name}** (re-select every role you want to keep):",
+            view=role_view,
+            ephemeral=True,
+        )
+        await role_view.wait()
+        if not role_view.selected_role_ids:
+            await interaction.followup.send(
+                "❌ No roles selected — category not updated.", ephemeral=True
+            )
+            return
+
+        guild = interaction.guild
+        categories = await self.config.guild(guild).ticket_categories()
+        cat_conf = None
+        for cat in categories:
+            if isinstance(cat, dict) and cat.get("name") == cat_name:
+                cat["role_ids"] = role_view.selected_role_ids
+                cat_conf = cat
+                break
+        await self.config.guild(guild).ticket_categories.set(categories)
+        self.categories = [c for c in categories if isinstance(c, dict)]
+
+        # Sync permissions on the Discord category
+        if cat_conf and cat_conf.get("discord_category_id"):
+            discord_cat = guild.get_channel(cat_conf["discord_category_id"])
+            if discord_cat:
+                new_overwrites = {
+                    guild.default_role: discord.PermissionOverwrite(view_channel=False),
+                    guild.me: discord.PermissionOverwrite(
+                        view_channel=True, send_messages=True,
+                        manage_channels=True, manage_permissions=True,
+                    ),
+                }
+                for rid in role_view.selected_role_ids:
+                    role = guild.get_role(rid)
+                    if role:
+                        new_overwrites[role] = discord.PermissionOverwrite(
+                            view_channel=True, send_messages=True, read_message_history=True
+                        )
+                await discord_cat.edit(overwrites=new_overwrites)
+
+        await interaction.followup.send(f"✅ **{cat_name}** updated.", ephemeral=True)
+
+    @discord.ui.button(label="🗑️ Delete Category", style=discord.ButtonStyle.red)
+    async def delete(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not self.categories:
+            await interaction.response.send_message("⚠️ No categories to delete.", ephemeral=True)
+            return
+        options = [discord.SelectOption(label=c["name"], value=c["name"]) for c in self.categories]
+        select_view = _SingleSelectView(options, placeholder="Select category to delete…")
+        await interaction.response.send_message(
+            "Select a category to delete:", view=select_view, ephemeral=True
+        )
+        await select_view.wait()
+        if not select_view.selected:
+            return
+
+        cat_name = select_view.selected
+        confirm = ConfirmView()
+        await interaction.followup.send(
+            f"Remove **{cat_name}** from the ticket menu?\n"
+            "The Discord channel category will **not** be deleted — only the configuration.",
+            view=confirm,
+            ephemeral=True,
+        )
+        await confirm.wait()
+        if not confirm.confirmed:
+            await interaction.followup.send("❌ Cancelled.", ephemeral=True)
+            return
+
+        guild = interaction.guild
+        categories = await self.config.guild(guild).ticket_categories()
+        categories = [
+            c for c in categories
+            if not (isinstance(c, dict) and c.get("name") == cat_name)
+        ]
+        await self.config.guild(guild).ticket_categories.set(categories)
+        self.categories = [c for c in categories if isinstance(c, dict)]
+        await interaction.followup.send(f"✅ **{cat_name}** removed.", ephemeral=True)
