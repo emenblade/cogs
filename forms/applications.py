@@ -138,7 +138,8 @@ class ApplicationManager:
                 )
             await dm.send(
                 f"**Question {i+1} is currently:**\n> {display_q}{rule_note}\n\n"
-                f"Reply with new text to replace it, or reply `keep` to leave it unchanged.\n\n{_MIN_RULE_HINT}"
+                f"Reply with new text to replace it, reply `keep` to leave it unchanged, "
+                f"or reply `delete` to remove it.\n\n{_MIN_RULE_HINT}"
             )
             try:
                 reply = await self.bot.wait_for("message", check=check, timeout=300)
@@ -147,11 +148,15 @@ class ApplicationManager:
                 updated.extend(existing_questions[i:])
                 return updated
 
-            if reply.content.strip().lower() == "keep":
+            cmd = reply.content.strip().lower()
+            if cmd == "keep":
                 updated.append(q)
+                await dm.send(f"✅ Question {i+1} kept.")
+            elif cmd == "delete":
+                await dm.send(f"🗑️ Question {i+1} deleted.")
             else:
                 updated.append(reply.content.strip())
-            await dm.send(f"✅ Question {i+1} updated.")
+                await dm.send(f"✅ Question {i+1} updated.")
 
         # Ask if they want to add more
         await dm.send(
@@ -258,7 +263,8 @@ class ApplicationManager:
         total = len(app["questions"])
         first_q, _ = parse_question(app["questions"][0])
         await dm.send(
-            f"👋 Welcome to the **{app['name']}** application! ({total} question(s))\n\n"
+            f"👋 Welcome to the **{app['name']}** application! ({total} question(s))\n"
+            f"*Reply `cancel` at any time to cancel your application.*\n\n"
             f"**Question 1 of {total}:** {first_q}"
         )
 
@@ -278,6 +284,13 @@ class ApplicationManager:
         questions = app["questions"]
         total = len(questions)
         answer = message.content.strip()
+
+        if answer.lower() == "cancel":
+            await self.config.user(member).active_application.set(None)
+            await message.channel.send(
+                "❌ Application cancelled. You can start again any time by clicking Apply."
+            )
+            return
 
         # Validate minimum length rule if one is set on this question
         current_q = questions[state["question_index"]]
@@ -367,6 +380,12 @@ class ApplicationManager:
         if len(transcript) > 2000:
             fp = io.BytesIO(transcript.encode("utf-8"))
             await thread.send(file=discord.File(fp, filename=f"{app['slug']}-{user.name}.txt"))
+
+        # Ping reviewer roles so staff are notified
+        reviewer_role_ids = assignments.get(app["slug"], {}).get("reviewer_role_ids", [])
+        if reviewer_role_ids:
+            mentions = " ".join(f"<@&{rid}>" for rid in reviewer_role_ids)
+            await thread.send(content=mentions)
 
         # Store for restart recovery
         assignments = await guild_conf.application_assignments()
