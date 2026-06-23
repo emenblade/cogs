@@ -327,6 +327,38 @@ class _AddMemberSelectView(discord.ui.View):
         )
 
 
+class _RemoveMemberSelectView(discord.ui.View):
+    """Ephemeral view for removing a member's explicit access from a ticket channel."""
+
+    def __init__(self, channel: discord.TextChannel, removable: list[discord.Member]):
+        super().__init__(timeout=60)
+        self.channel = channel
+        options = [
+            discord.SelectOption(label=m.display_name, value=str(m.id))
+            for m in removable[:25]
+        ]
+        select = discord.ui.Select(options=options, placeholder="Select a member to remove…")
+        select.callback = self._callback
+        self.add_item(select)
+
+    async def _callback(self, interaction: discord.Interaction):
+        member_id = int(interaction.data["values"][0])
+        member = interaction.guild.get_member(member_id)
+        if member is None:
+            await interaction.response.send_message(
+                "⚠️ Could not find that member in this server.", ephemeral=True
+            )
+            return
+        await self.channel.set_permissions(member, overwrite=None)
+        await self.channel.send(
+            f"👤 {member.mention} has been removed from this ticket by {interaction.user.mention}."
+        )
+        await interaction.response.send_message(
+            f"✅ {member.mention} has been removed from the ticket.", ephemeral=True
+        )
+        self.stop()
+
+
 class CloseTicketView(discord.ui.View):
     """Persistent view posted in each ticket channel. Only staff can add members or close."""
 
@@ -340,6 +372,8 @@ class CloseTicketView(discord.ui.View):
         for child in self.children:
             if getattr(child, "custom_id", None) == "forms:add_member:_":
                 child.custom_id = f"forms:add_member:{channel_id}"
+            elif getattr(child, "custom_id", None) == "forms:remove_member:_":
+                child.custom_id = f"forms:remove_member:{channel_id}"
             elif getattr(child, "custom_id", None) == "forms:close_ticket:_":
                 child.custom_id = f"forms:close_ticket:{channel_id}"
             elif getattr(child, "custom_id", None) == "forms:move_ticket:_":
@@ -359,6 +393,31 @@ class CloseTicketView(discord.ui.View):
         view = _AddMemberSelectView(interaction.channel)
         await interaction.response.send_message(
             "Select a member to add to this ticket:", view=view, ephemeral=True
+        )
+
+    @discord.ui.button(
+        label="👤 Remove Member",
+        style=discord.ButtonStyle.grey,
+        custom_id="forms:remove_member:_",
+    )
+    async def remove_member(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not check_staff_role(interaction, self.staff_role_id):
+            await interaction.response.send_message(
+                "⚠️ Only staff can remove members from tickets.", ephemeral=True
+            )
+            return
+        removable = [
+            target for target, _ in interaction.channel.overwrites.items()
+            if isinstance(target, discord.Member) and target.id != interaction.guild.me.id
+        ]
+        if not removable:
+            await interaction.response.send_message(
+                "⚠️ No members with explicit access to remove.", ephemeral=True
+            )
+            return
+        view = _RemoveMemberSelectView(interaction.channel, removable)
+        await interaction.response.send_message(
+            "Select a member to remove from this ticket:", view=view, ephemeral=True
         )
 
     @discord.ui.button(
