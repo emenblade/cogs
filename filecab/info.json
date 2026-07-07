@@ -1,0 +1,10 @@
+{
+  "name": "Filecab",
+  "short": "DOJ document filing, Discord-native.",
+  "description": "Members fill out DOJ legal document templates via DM Q&A; finished documents are rendered and prepared for publishing to a GitHub Pages site, with an optional staff approve/deny gate.",
+  "author": ["emenblade"],
+  "install_msg": "Load with `[p]load filecab`, then run `[p]filecab setup` to configure.",
+  "min_bot_version": "3.5.0",
+  "min_python_version": [3, 8, 0],
+  "end_user_data_statement": "This cog stores document filing answers and per-user filing state linked to Discord user IDs. Data can be deleted on request via `[p]mydata forgetme`."
+}
