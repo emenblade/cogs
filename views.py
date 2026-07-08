@@ -1,15 +1,19 @@
 """All Discord UI views and modals for the Filecab cog."""
 from __future__ import annotations
+from typing import Awaitable, Callable
 import discord
 from redbot.core import Config
+from .template_manager import TemplateManager
 from .utils import can_review
 
 
-def build_template_options(cog) -> list[discord.SelectOption]:
+def build_template_options(cog, include_staff_authored: bool = False) -> list[discord.SelectOption]:
     """Build select options from the cog's currently loaded templates."""
+    templates = cog.templates
     return [
-        discord.SelectOption(label=spec.get("name", slug), value=slug)
-        for slug, spec in cog.templates.all_templates().items()
+        discord.SelectOption(label=spec["title"], value=template_id)
+        for template_id, spec in templates.all_templates().items()
+        if include_staff_authored or not templates.is_staff_authored(spec)
     ][:25]
 
 
@@ -76,7 +80,7 @@ class WizardStep1View(_WizardStepView):
         self.stop()
         view = WizardStep2View(self.config, self.guild_id, self.bot)
         embed = discord.Embed(
-            title="Filecab Setup — Step 2 of 3",
+            title="Filecab Setup — Step 2 of 4",
             description="Select the **staff review forum** where pending filings are posted for Approve/Deny.",
             color=discord.Color.blurple(),
         )
@@ -109,10 +113,10 @@ class WizardStep2View(_WizardStepView):
         self.stop()
         view = WizardStep3View(self.config, self.guild_id, self.bot)
         embed = discord.Embed(
-            title="Filecab Setup — Step 3 of 3",
+            title="Filecab Setup — Step 3 of 4",
             description=(
-                "Optionally select an **approval role** (admins can always approve/deny).\n"
-                "Use the toggle to control whether filings need staff approval before publishing."
+                "Optionally select an **approval role** that can approve/deny filings "
+                "and make them public (admins can always do both)."
             ),
             color=discord.Color.blurple(),
         )
@@ -125,11 +129,7 @@ class WizardStep2View(_WizardStepView):
 
 
 class WizardStep3View(_WizardStepView):
-    """Step 3: approval role + require-approval toggle, then finish."""
-
-    def __init__(self, config: Config, guild_id: int, bot):
-        super().__init__(config, guild_id, bot)
-        self._approval_required = True
+    """Step 3: approval role, then on to the site repository step."""
 
     @discord.ui.select(
         cls=discord.ui.RoleSelect,
@@ -139,34 +139,124 @@ class WizardStep3View(_WizardStepView):
         self._selected = select.values[0]
         await interaction.response.defer()
 
-    @discord.ui.button(label="Approval Required: ON", style=discord.ButtonStyle.blurple)
-    async def toggle_approval(self, interaction: discord.Interaction, button: discord.ui.Button):
-        self._approval_required = not self._approval_required
-        button.label = f"Approval Required: {'ON' if self._approval_required else 'OFF'}"
-        await interaction.response.edit_message(view=self)
-
-    @discord.ui.button(label="Finish Setup", style=discord.ButtonStyle.green)
+    @discord.ui.button(label="Continue", style=discord.ButtonStyle.green)
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
         guild_conf = self.config.guild_from_id(self.guild_id)
         await guild_conf.approval_role.set(self._selected.id if self._selected else None)
-        await guild_conf.approval_required.set(self._approval_required)
         self.stop()
-        await interaction.response.defer(ephemeral=True)
+        view = WizardStep4View(self.config, self.guild_id, self.bot)
+        embed = discord.Embed(
+            title="Filecab Setup — Step 4 of 4",
+            description=(
+                "Set the **site repository** — the GitHub repo (`owner/repo`) that serves as "
+                "both the templates source and the publish destination, matching the structure "
+                "the site already uses.\n\n"
+                "Publishing also needs a GitHub token — run `[p]set api github token,<token>` "
+                "separately (bot owner only); it isn't asked for here."
+            ),
+            color=discord.Color.blurple(),
+        )
+        await interaction.response.edit_message(embed=embed, view=view)
 
-        guild = self.bot.get_guild(self.guild_id)
-        msg = await post_document_panel(guild, self.config, self.bot) if guild else None
-        if msg:
-            await interaction.followup.send(
-                "✅ Setup complete! The document panel has been posted.", ephemeral=True
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.red)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.stop()
+        await interaction.response.edit_message(content="❌ Setup cancelled.", view=None, embed=None)
+
+
+class SiteRepoModal(discord.ui.Modal, title="Site Repository"):
+    """Collects the GitHub repo used for both fetching templates and publishing filings."""
+
+    repo = discord.ui.TextInput(
+        label="GitHub repo (owner/repo)",
+        placeholder="emenblade/lcrpfilecab",
+        max_length=100,
+    )
+    branch = discord.ui.TextInput(
+        label="Branch",
+        default="main",
+        required=False,
+        max_length=100,
+    )
+    base_url = discord.ui.TextInput(
+        label="Site base URL (optional override)",
+        placeholder="Leave blank for https://<owner>.github.io/<repo>",
+        required=False,
+        max_length=200,
+    )
+
+    def __init__(self, config: Config, on_done: Callable[[discord.Interaction, str, int, str], Awaitable[None]] | None = None):
+        super().__init__()
+        self.config = config
+        self.on_done = on_done
+
+    async def on_submit(self, interaction: discord.Interaction):
+        repo_value = self.repo.value.strip()
+        if "/" not in repo_value:
+            await interaction.response.send_message(
+                "⚠️ Repo must be in `owner/repo` format.", ephemeral=True
             )
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        branch = self.branch.value.strip() or "main"
+        await self.config.site_repo.set(repo_value)
+        await self.config.site_branch.set(branch)
+        await self.config.site_base_url.set(self.base_url.value.strip() or None)
+
+        cog = interaction.client.cogs["Filecab"]
+        owner, repo = repo_value.split("/", 1)
+        count = await cog.templates.refresh_from_repo(cog.github, owner, repo, branch)
+
+        token = await cog.github.get_token()
+        token_note = (
+            "" if token else
+            "\n⚠️ No GitHub token is set yet — publishing won't work until you run "
+            "`[p]set api github token,<token>`."
+        )
+
+        if self.on_done:
+            await self.on_done(interaction, repo_value, count, token_note)
         else:
             await interaction.followup.send(
-                "✅ Setup saved, but no templates are loaded yet (or the document channel "
-                "couldn't be found), so the panel wasn't posted. Drop template HTML+JSON "
-                "pairs into the cog's data folder, then use `filecab settings` → "
-                "**Repost Panel**.",
+                f"✅ Site repo set to `{repo_value}`. Fetched **{count}** template(s).{token_note}",
                 ephemeral=True,
             )
+
+
+class WizardStep4View(_WizardStepView):
+    """Step 4: site repository, then finish."""
+
+    @discord.ui.button(label="Set Site Repository", style=discord.ButtonStyle.blurple)
+    async def set_repo(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(SiteRepoModal(self.config, on_done=self._finish))
+
+    @discord.ui.button(label="Skip for now", style=discord.ButtonStyle.grey)
+    async def skip(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        await self._finish(interaction, None, 0, "")
+
+    async def _finish(
+        self, interaction: discord.Interaction, repo_value: str | None, count: int, token_note: str
+    ) -> None:
+        self.stop()
+        guild = self.bot.get_guild(self.guild_id)
+        msg = await post_document_panel(guild, self.config, self.bot) if guild else None
+
+        parts = []
+        if repo_value:
+            parts.append(f"✅ Site repo set to `{repo_value}`. Fetched **{count}** template(s).{token_note}")
+        else:
+            parts.append("Site repo not configured — set it later via `filecab settings`.")
+        if msg:
+            parts.append("✅ Setup complete! The document panel has been posted.")
+        else:
+            parts.append(
+                "✅ Setup saved, but no citizen-facing templates are loaded yet (or the document "
+                "channel couldn't be found), so the panel wasn't posted. Run `filecab refresh` "
+                "once templates are available, then `filecab settings` → **Repost Panel**."
+            )
+        await interaction.followup.send("\n".join(parts), ephemeral=True)
 
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.red)
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -175,11 +265,14 @@ class WizardStep3View(_WizardStepView):
 
 
 # ---------------------------------------------------------------------------
-# Document panel (persistent)
+# Document panel (persistent) + staff "file on behalf" command
 # ---------------------------------------------------------------------------
 
 class TemplateSelectView(discord.ui.View):
-    """Persistent view: document-type select posted in the document channel."""
+    """Persistent view: document-type select posted in the document channel.
+
+    Only lists templates a citizen can file (excludes judge-authored ones).
+    """
 
     def __init__(self, config: Config, bot, options: list[discord.SelectOption]):
         super().__init__(timeout=None)
@@ -196,37 +289,192 @@ class TemplateSelectView(discord.ui.View):
             )
 
         async def callback(self, interaction: discord.Interaction):
-            slug = self.values[0]
+            await _start_filing_from_select(interaction, self.values[0])
+
+
+class StaffFileSelectView(discord.ui.View):
+    """Ephemeral view for `filecab file`: staff can file any template, including
+    judge-authored ones with no citizen applicant role."""
+
+    def __init__(self, options: list[discord.SelectOption]):
+        super().__init__(timeout=120)
+        self.add_item(self._TemplateSelect(options))
+
+    class _TemplateSelect(discord.ui.Select):
+        def __init__(self, options: list[discord.SelectOption]):
+            super().__init__(placeholder="Select a document type to file…", options=options)
+
+        async def callback(self, interaction: discord.Interaction):
+            await _start_filing_from_select(interaction, self.values[0])
+
+
+async def _start_filing_from_select(interaction: discord.Interaction, template_id: str) -> None:
+    cog = interaction.client.cogs["Filecab"]
+    try:
+        dm = await interaction.user.create_dm()
+    except discord.Forbidden:
+        await interaction.response.send_message(
+            "⚠️ I couldn't DM you. Please enable DMs from server members and try again.",
+            ephemeral=True,
+        )
+        return
+    await interaction.response.send_message(
+        "📬 Check your DMs — I've sent you the first question!", ephemeral=True
+    )
+    await cog.filing.start_filing(interaction.user, interaction.guild, template_id, dm)
+
+
+# ---------------------------------------------------------------------------
+# Review forum (persistent): pending (+ signer handoff) -> approved -> published
+# ---------------------------------------------------------------------------
+
+class SignatureFieldsModal(discord.ui.Modal):
+    """Generic modal collecting a set of fields' values via typed text input.
+
+    Shared by the approval-time judge-fields collection and the signer
+    handoff Sign flow — both just need "type your name/etc. into N boxes".
+    """
+
+    def __init__(
+        self,
+        title: str,
+        fields: list[dict],
+        on_submit_callback: Callable[[discord.Interaction, dict[str, str]], Awaitable[None]],
+    ):
+        super().__init__(title=title)
+        self.field_keys = [f["key"] for f in fields]
+        self._on_submit_callback = on_submit_callback
+        for field in fields[:5]:
+            self.add_item(
+                discord.ui.TextInput(
+                    label=field["label"][:45],
+                    required=field.get("required", True),
+                    style=discord.TextStyle.paragraph if field.get("type") == "text" else discord.TextStyle.short,
+                    max_length=1000 if field.get("type") == "text" else 200,
+                )
+            )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        answers = {key: item.value for key, item in zip(self.field_keys, self.children)}
+        await self._on_submit_callback(interaction, answers)
+
+
+async def _finish_approval(
+    interaction: discord.Interaction,
+    filing_id: str,
+    judge_answers: dict[str, str],
+    origin_message: discord.Message,
+) -> None:
+    await interaction.response.defer(ephemeral=True)
+    cog = interaction.client.cogs["Filecab"]
+    ok = await cog.filing.approve(interaction.guild, filing_id, interaction.user, judge_answers)
+    if not ok:
+        await interaction.followup.send(
+            "⚠️ Couldn't approve — either this filing isn't pending anymore, or not every "
+            "signer has signed yet.",
+            ephemeral=True,
+        )
+        return
+    await origin_message.edit(view=ApprovedDocumentView(filing_id))
+    await interaction.followup.send(
+        "✅ Approved and filed. Use **Make Public** on the thread whenever it's ready to go live.",
+        ephemeral=True,
+    )
+
+
+def _assign_button_appearance(label: str, state: dict) -> tuple[discord.ButtonStyle, str, bool]:
+    status = state.get("status", "unassigned")
+    if status == "signed":
+        return discord.ButtonStyle.green, f"✅ {label}: signed", True
+    if status == "pending":
+        return discord.ButtonStyle.grey, f"⏳ {label}: awaiting reply", True
+    if status == "declined":
+        return discord.ButtonStyle.red, f"🔁 Reassign {label}", False
+    return discord.ButtonStyle.blurple, f"Assign {label}", False
+
+
+class _AssignButton(discord.ui.Button):
+    """One button per handoff signer role on the review-forum post."""
+
+    def __init__(self, filing_id: str, role: str, label: str, state: dict):
+        style, text, disabled = _assign_button_appearance(label, state)
+        super().__init__(
+            label=text,
+            style=style,
+            disabled=disabled,
+            custom_id=f"filecab:assign:{filing_id}:{role}",
+        )
+        self.filing_id = filing_id
+        self.role = role
+        self.signer_label = label
+
+    async def callback(self, interaction: discord.Interaction):
+        cog = interaction.client.cogs["Filecab"]
+        role_id = await cog.config.guild(interaction.guild).approval_role()
+        if not await can_review(interaction, role_id):
+            await interaction.response.send_message(
+                "⚠️ You don't have permission to assign signers.", ephemeral=True
+            )
+            return
+        view = _AssignUserSelectView(self.filing_id, self.role, self.signer_label)
+        await interaction.response.send_message(
+            f"Select the **{self.signer_label}** for this filing:", view=view, ephemeral=True
+        )
+
+
+class _AssignUserSelectView(discord.ui.View):
+    """Ephemeral one-shot UserSelect shown when staff click an Assign button."""
+
+    def __init__(self, filing_id: str, role: str, label: str):
+        super().__init__(timeout=120)
+        self.add_item(self._Select(filing_id, role, label))
+
+    class _Select(discord.ui.UserSelect):
+        def __init__(self, filing_id: str, role: str, label: str):
+            super().__init__(placeholder=f"Select the {label}…")
+            self.filing_id = filing_id
+            self.role = role
+
+        async def callback(self, interaction: discord.Interaction):
+            member = self.values[0]
+            await interaction.response.defer(ephemeral=True)
             cog = interaction.client.cogs["Filecab"]
-            try:
-                dm = await interaction.user.create_dm()
-            except discord.Forbidden:
-                await interaction.response.send_message(
-                    "⚠️ I couldn't DM you. Please enable DMs from server members and try again.",
+            ok = await cog.filing.assign_signer(interaction.guild, self.filing_id, self.role, member)
+            if ok:
+                await interaction.followup.send(
+                    f"✅ Sent the signing request to {member.mention}.", ephemeral=True
+                )
+            else:
+                await interaction.followup.send(
+                    f"⚠️ Couldn't DM {member.mention} — ask them to enable DMs from server "
+                    "members and try again.",
                     ephemeral=True,
                 )
-                return
-            await interaction.response.send_message(
-                "📬 Check your DMs — I've sent you the first question!", ephemeral=True
-            )
-            await cog.filing.start_filing(interaction.user, interaction.guild, slug, dm)
 
-
-# ---------------------------------------------------------------------------
-# Review forum (persistent)
-# ---------------------------------------------------------------------------
 
 class FilingReviewView(discord.ui.View):
-    """Persistent Approve/Deny buttons for a pending document filing."""
+    """Review-forum view: one Assign button per handoff signer role, plus Approve/Deny.
 
-    def __init__(self, config: Config, bot, doc_id: str):
+    Approve is disabled until every handoff role has signed.
+    """
+
+    def __init__(self, config: Config, bot, filing_id: str, spec: dict, signers_state: dict):
         super().__init__(timeout=None)
         self.config = config
         self.bot = bot
-        self.doc_id = doc_id
-        if len(self.children) >= 2:
-            self.children[0].custom_id = f"filecab:approve:{doc_id}"
-            self.children[1].custom_id = f"filecab:deny:{doc_id}"
+        self.filing_id = filing_id
+        self.spec = spec
+
+        self.children[0].custom_id = f"filecab:approve:{filing_id}"
+        self.children[1].custom_id = f"filecab:deny:{filing_id}"
+        self.children[0].disabled = not all(
+            s.get("status") == "signed" for s in signers_state.values()
+        )
+
+        for signer in TemplateManager.handoff_signers(spec):
+            role = signer["role"]
+            state = signers_state.get(role, {"status": "unassigned"})
+            self.add_item(_AssignButton(filing_id, role, signer["label"], state))
 
     async def _can_review(self, interaction: discord.Interaction) -> bool:
         role_id = await self.config.guild(interaction.guild).approval_role()
@@ -239,13 +487,19 @@ class FilingReviewView(discord.ui.View):
                 "⚠️ You don't have permission to review filings.", ephemeral=True
             )
             return
-        await interaction.response.defer(ephemeral=True)
         cog = interaction.client.cogs["Filecab"]
-        await cog.filing.approve(interaction.guild, self.doc_id)
-        for item in self.children:
-            item.disabled = True
-        await interaction.message.edit(view=self)
-        await interaction.followup.send("✅ Approved and published.", ephemeral=True)
+        judge_fields = cog.templates.approval_judge_fields(self.spec)
+        origin_message = interaction.message
+
+        if judge_fields:
+            async def _on_submit(modal_interaction: discord.Interaction, answers: dict[str, str]):
+                await _finish_approval(modal_interaction, self.filing_id, answers, origin_message)
+
+            await interaction.response.send_modal(
+                SignatureFieldsModal("Approve & Sign", judge_fields, _on_submit)
+            )
+        else:
+            await _finish_approval(interaction, self.filing_id, {}, origin_message)
 
     @discord.ui.button(label="❌ Deny", style=discord.ButtonStyle.red, custom_id="filecab:deny:_")
     async def deny(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -256,11 +510,111 @@ class FilingReviewView(discord.ui.View):
             return
         await interaction.response.defer(ephemeral=True)
         cog = interaction.client.cogs["Filecab"]
-        await cog.filing.deny(interaction.guild, self.doc_id)
+        await cog.filing.deny(interaction.guild, self.filing_id)
         for item in self.children:
             item.disabled = True
         await interaction.message.edit(view=self)
         await interaction.followup.send("❌ Denied.", ephemeral=True)
+
+
+class SignerRequestView(discord.ui.View):
+    """Persistent Sign/Decline buttons DM'd to an assigned handoff signer."""
+
+    def __init__(self, filing_id: str, role: str, guild_id: int):
+        super().__init__(timeout=None)
+        self.filing_id = filing_id
+        self.role = role
+        self.guild_id = guild_id
+        self.children[0].custom_id = f"filecab:sign:{filing_id}:{role}"
+        self.children[1].custom_id = f"filecab:decline:{filing_id}:{role}"
+
+    @discord.ui.button(label="✅ Sign", style=discord.ButtonStyle.green, custom_id="filecab:sign:_:_")
+    async def sign(self, interaction: discord.Interaction, button: discord.ui.Button):
+        cog = interaction.client.cogs["Filecab"]
+        guild = cog.bot.get_guild(self.guild_id)
+        if guild is None:
+            await interaction.response.send_message(
+                "⚠️ Something went wrong finding the server this filing belongs to.", ephemeral=True
+            )
+            return
+        published = await cog.config.guild(guild).published_documents()
+        record = published.get(self.filing_id)
+        spec = cog.templates.get(record["template_id"]) if record else None
+        fields = cog.templates.signer_fields(spec, self.role) if spec else []
+        if not fields:
+            await interaction.response.send_message(
+                "⚠️ This filing is no longer available.", ephemeral=True
+            )
+            return
+
+        origin_message = interaction.message
+
+        async def _on_submit(modal_interaction: discord.Interaction, answers: dict[str, str]):
+            await modal_interaction.response.defer(ephemeral=True)
+            ok = await cog.filing.sign(guild, self.filing_id, self.role, modal_interaction.user.id, answers)
+            if not ok:
+                await modal_interaction.followup.send(
+                    "⚠️ This request is no longer pending.", ephemeral=True
+                )
+                return
+            await origin_message.edit(
+                content=origin_message.content + "\n\n✅ You signed this document. Thank you!",
+                view=None,
+            )
+            await modal_interaction.followup.send("✅ Signed — thanks!", ephemeral=True)
+
+        await interaction.response.send_modal(SignatureFieldsModal("Sign Document", fields, _on_submit))
+
+    @discord.ui.button(label="❌ Decline", style=discord.ButtonStyle.red, custom_id="filecab:decline:_:_")
+    async def decline(self, interaction: discord.Interaction, button: discord.ui.Button):
+        cog = interaction.client.cogs["Filecab"]
+        guild = cog.bot.get_guild(self.guild_id)
+        if guild is None:
+            await interaction.response.send_message(
+                "⚠️ Something went wrong finding the server this filing belongs to.", ephemeral=True
+            )
+            return
+        await interaction.response.defer(ephemeral=True)
+        ok = await cog.filing.decline_signer(guild, self.filing_id, self.role, interaction.user.id)
+        if not ok:
+            await interaction.followup.send("⚠️ This request is no longer pending.", ephemeral=True)
+            return
+        await interaction.message.edit(
+            content=interaction.message.content + "\n\n❌ You declined to sign this document.",
+            view=None,
+        )
+        await interaction.followup.send("Declined. Staff have been notified.", ephemeral=True)
+
+
+class ApprovedDocumentView(discord.ui.View):
+    """Persistent view shown after approval: on file, not yet public."""
+
+    def __init__(self, filing_id: str):
+        super().__init__(timeout=None)
+        self.filing_id = filing_id
+        self.children[0].custom_id = f"filecab:makepublic:{filing_id}"
+
+    @discord.ui.button(label="🌐 Make Public", style=discord.ButtonStyle.blurple, custom_id="filecab:makepublic:_")
+    async def make_public(self, interaction: discord.Interaction, button: discord.ui.Button):
+        guild_conf_role = await interaction.client.cogs["Filecab"].config.guild(interaction.guild).approval_role()
+        if not await can_review(interaction, guild_conf_role):
+            await interaction.response.send_message(
+                "⚠️ You don't have permission to publish filings.", ephemeral=True
+            )
+            return
+        await interaction.response.defer(ephemeral=True)
+        cog = interaction.client.cogs["Filecab"]
+        url = await cog.filing.make_public(interaction.guild, self.filing_id)
+        button.disabled = True
+        button.label = "✅ Published"
+        await interaction.message.edit(view=self)
+        if url:
+            await interaction.followup.send(f"🌐 Published — {url}", ephemeral=True)
+        else:
+            await interaction.followup.send(
+                "🌐 Marked published, but site publishing isn't wired up yet — announced locally only.",
+                ephemeral=True,
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -308,26 +662,39 @@ class SettingsPanelView(discord.ui.View):
             f"✅ Approval role set to {select.values[0].mention}.", ephemeral=True
         )
 
-    @discord.ui.button(label="Toggle Require Approval", style=discord.ButtonStyle.blurple, row=3)
-    async def toggle_approval(self, interaction: discord.Interaction, button: discord.ui.Button):
-        guild_conf = self.config.guild(interaction.guild)
-        current = await guild_conf.approval_required()
-        await guild_conf.approval_required.set(not current)
-        await interaction.response.send_message(
-            f"✅ Approval required is now **{'ON' if not current else 'OFF'}**.", ephemeral=True
-        )
-
     @discord.ui.button(label="Reload Templates", style=discord.ButtonStyle.blurple, row=3)
     async def reload_templates(self, interaction: discord.Interaction, button: discord.ui.Button):
         cog = interaction.client.cogs["Filecab"]
         templates = cog.templates.reload()
         if templates:
-            listing = "\n".join(f"• {spec.get('name', slug)} (`{slug}`)" for slug, spec in templates.items())
+            listing = "\n".join(f"• {spec['title']} (`{tid}`)" for tid, spec in templates.items())
         else:
             listing = "None found."
         await interaction.response.send_message(
             f"🔄 Reloaded. **{len(templates)}** template(s) loaded:\n{listing}", ephemeral=True
         )
+
+    @discord.ui.button(label="Refresh Templates from Repo", style=discord.ButtonStyle.blurple, row=3)
+    async def refresh_templates(self, interaction: discord.Interaction, button: discord.ui.Button):
+        cog = interaction.client.cogs["Filecab"]
+        site_repo = await self.config.site_repo()
+        if not site_repo or "/" not in site_repo:
+            await interaction.response.send_message(
+                "⚠️ No site repository configured yet — use **Change Site Repo** first.",
+                ephemeral=True,
+            )
+            return
+        await interaction.response.defer(ephemeral=True)
+        owner, repo = site_repo.split("/", 1)
+        branch = await self.config.site_branch()
+        count = await cog.templates.refresh_from_repo(cog.github, owner, repo, branch)
+        await interaction.followup.send(
+            f"🔄 Fetched **{count}** template(s) from `{site_repo}`.", ephemeral=True
+        )
+
+    @discord.ui.button(label="Change Site Repo", style=discord.ButtonStyle.blurple, row=4)
+    async def change_site_repo(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(SiteRepoModal(self.config))
 
     @discord.ui.button(label="Repost Panel", style=discord.ButtonStyle.blurple, row=3)
     async def repost_panel(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -363,8 +730,8 @@ class ManageDocumentsView(discord.ui.View):
         self.config = config
         self.bot = bot
         options = [
-            discord.SelectOption(label=f"{rec['slug']} ({doc_id})", value=doc_id)
-            for doc_id, rec in list(documents.items())[:25]
+            discord.SelectOption(label=f"{rec['title']} ({filing_id})", value=filing_id)
+            for filing_id, rec in list(documents.items())[:25]
         ]
         self.add_item(self._DocumentSelect(options))
 
@@ -373,14 +740,14 @@ class ManageDocumentsView(discord.ui.View):
             super().__init__(placeholder="Select a document…", options=options)
 
         async def callback(self, interaction: discord.Interaction):
-            doc_id = self.values[0]
+            filing_id = self.values[0]
             cog = interaction.client.cogs["Filecab"]
-            removed = await cog.filing.takedown(interaction.guild, doc_id)
+            removed = await cog.filing.takedown(interaction.guild, filing_id)
             if removed:
                 await interaction.response.edit_message(
-                    content=f"🗑️ Took down `{doc_id}`.", view=None
+                    content=f"🗑️ Took down `{filing_id}`.", view=None
                 )
             else:
                 await interaction.response.edit_message(
-                    content=f"⚠️ Could not find `{doc_id}`.", view=None
+                    content=f"⚠️ Could not find `{filing_id}`.", view=None
                 )
