@@ -1,21 +1,31 @@
 """Shared utility functions for the Filecab cog."""
 from __future__ import annotations
+import html as html_lib
 import re
 import discord
 
 _PLACEHOLDER_RE = re.compile(r"\{\{\s*([a-zA-Z0-9_]+)\s*\}\}")
 
 
-def render_template(html: str, answers: dict[str, str]) -> str:
+def render_template(html_text: str, answers: dict[str, str]) -> str:
     """Substitute `{{field_key}}` placeholders in an HTML template.
 
-    Unmatched placeholders are left as-is rather than raising, so a template
-    referencing a field that wasn't collected doesn't break rendering.
+    Every answer is HTML-escaped before insertion — these documents get
+    published to a public site, and answers come from Discord users (DM
+    replies, signer/judge modal input), so treat all of it as untrusted.
+    Without escaping, a filer typing `<script>...` into any text field would
+    get it embedded verbatim in the rendered page (stored XSS on the live
+    site). Unmatched placeholders are left as-is rather than raising, so a
+    template referencing a field that wasn't collected doesn't break
+    rendering.
     """
     def _sub(match: re.Match) -> str:
-        return answers.get(match.group(1), match.group(0))
+        key = match.group(1)
+        if key not in answers:
+            return match.group(0)
+        return html_lib.escape(answers[key])
 
-    return _PLACEHOLDER_RE.sub(_sub, html)
+    return _PLACEHOLDER_RE.sub(_sub, html_text)
 
 
 def normalize_base_url(url: str) -> str:
