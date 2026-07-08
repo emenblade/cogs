@@ -166,7 +166,7 @@ class Filecab(commands.Cog):
             description="Select the **document channel** where the filing panel will be posted.",
             color=discord.Color.blurple(),
         )
-        await ctx.send(embed=embed, view=view)
+        view.message = await ctx.send(embed=embed, view=view)
 
     @filecab_group.command(name="settings")
     async def filecab_settings(self, ctx: commands.Context) -> None:
@@ -186,7 +186,7 @@ class Filecab(commands.Cog):
 
         view = SettingsPanelView(self.config, self.bot)
         embed = discord.Embed(title="⚙️ Filecab Settings", color=discord.Color.blurple())
-        await ctx.send(embed=embed, view=view, ephemeral=True)
+        view.message = await ctx.send(embed=embed, view=view, ephemeral=True)
 
     @filecab_group.command(name="file")
     async def filecab_file(self, ctx: commands.Context) -> None:
@@ -209,7 +209,7 @@ class Filecab(commands.Cog):
             await ctx.send("No templates are loaded yet.", ephemeral=True)
             return
         view = StaffFileSelectView(options)
-        await ctx.send("Select a document type to file:", view=view, ephemeral=True)
+        view.message = await ctx.send("Select a document type to file:", view=view, ephemeral=True)
 
     @filecab_group.command(name="templates")
     async def filecab_templates(self, ctx: commands.Context) -> None:

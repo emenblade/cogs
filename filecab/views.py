@@ -53,10 +53,17 @@ class _WizardStepView(discord.ui.View):
         self.guild_id = guild_id
         self.bot = bot
         self._selected = None
+        self.message: discord.Message | None = None
 
     async def on_timeout(self):
-        for item in self.children:
-            item.disabled = True
+        if self.message is not None:
+            try:
+                await self.message.edit(
+                    content="⏱️ Setup timed out — run `filecab setup` again to restart.",
+                    embed=None, view=None,
+                )
+            except discord.HTTPException:
+                pass
 
 
 class WizardStep1View(_WizardStepView):
@@ -79,6 +86,7 @@ class WizardStep1View(_WizardStepView):
         await self.config.guild_from_id(self.guild_id).document_channel.set(self._selected.id)
         self.stop()
         view = WizardStep2View(self.config, self.guild_id, self.bot)
+        view.message = interaction.message
         embed = discord.Embed(
             title="Filecab Setup — Step 2 of 4",
             description="Select the **staff review forum** where pending filings are posted for Approve/Deny.",
@@ -112,6 +120,7 @@ class WizardStep2View(_WizardStepView):
         await self.config.guild_from_id(self.guild_id).document_review_forum.set(self._selected.id)
         self.stop()
         view = WizardStep3View(self.config, self.guild_id, self.bot)
+        view.message = interaction.message
         embed = discord.Embed(
             title="Filecab Setup — Step 3 of 4",
             description=(
@@ -145,6 +154,7 @@ class WizardStep3View(_WizardStepView):
         await guild_conf.approval_role.set(self._selected.id if self._selected else None)
         self.stop()
         view = WizardStep4View(self.config, self.guild_id, self.bot)
+        view.message = interaction.message
         embed = discord.Embed(
             title="Filecab Setup — Step 4 of 4",
             description=(
@@ -230,17 +240,32 @@ class WizardStep4View(_WizardStepView):
 
     @discord.ui.button(label="Set Site Repository", style=discord.ButtonStyle.blurple)
     async def set_repo(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(SiteRepoModal(self.config, on_done=self._finish))
+        origin_message = interaction.message
+
+        async def _on_done(modal_interaction: discord.Interaction, repo_value: str, count: int, token_note: str):
+            await self._finish(modal_interaction, origin_message, repo_value, count, token_note)
+
+        await interaction.response.send_modal(SiteRepoModal(self.config, on_done=_on_done))
 
     @discord.ui.button(label="Skip for now", style=discord.ButtonStyle.grey)
     async def skip(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
-        await self._finish(interaction, None, 0, "")
+        await self._finish(interaction, interaction.message, None, 0, "")
 
     async def _finish(
-        self, interaction: discord.Interaction, repo_value: str | None, count: int, token_note: str
+        self,
+        interaction: discord.Interaction,
+        origin_message: discord.Message | None,
+        repo_value: str | None,
+        count: int,
+        token_note: str,
     ) -> None:
         self.stop()
+        if origin_message is not None:
+            try:
+                await origin_message.edit(view=None)
+            except discord.HTTPException:
+                pass
         guild = self.bot.get_guild(self.guild_id)
         msg = await post_document_panel(guild, self.config, self.bot) if guild else None
 
@@ -269,6 +294,27 @@ class WizardStep4View(_WizardStepView):
 # Document panel (persistent) + staff "file on behalf" command
 # ---------------------------------------------------------------------------
 
+class _ExpiringView(discord.ui.View):
+    """Base for short-lived ephemeral/staff views.
+
+    Removes its own buttons on timeout instead of leaving stale ones sitting
+    there — clicking an expired component otherwise fails with a generic
+    "This interaction failed" error, which is confusing. Callers must set
+    `.message` right after sending (there's no way to get it otherwise).
+    """
+
+    def __init__(self, *, timeout: float):
+        super().__init__(timeout=timeout)
+        self.message: discord.Message | None = None
+
+    async def on_timeout(self) -> None:
+        if self.message is not None:
+            try:
+                await self.message.edit(view=None)
+            except discord.HTTPException:
+                pass
+
+
 class TemplateSelectView(discord.ui.View):
     """Persistent view: document-type select posted in the document channel.
 
@@ -293,7 +339,7 @@ class TemplateSelectView(discord.ui.View):
             await _start_filing_from_select(interaction, self.values[0])
 
 
-class StaffFileSelectView(discord.ui.View):
+class StaffFileSelectView(_ExpiringView):
     """Ephemeral view for `filecab file`: staff can file any template, including
     judge-authored ones with no citizen applicant role."""
 
@@ -421,9 +467,10 @@ class _AssignButton(discord.ui.Button):
         await interaction.response.send_message(
             f"Select the **{self.signer_label}** for this filing:", view=view, ephemeral=True
         )
+        view.message = await interaction.original_response()
 
 
-class _AssignUserSelectView(discord.ui.View):
+class _AssignUserSelectView(_ExpiringView):
     """Ephemeral one-shot UserSelect shown when staff click an Assign button."""
 
     def __init__(self, filing_id: str, role: str, label: str):
@@ -626,9 +673,9 @@ class ApprovedDocumentView(discord.ui.View):
 # Settings panel
 # ---------------------------------------------------------------------------
 
-class SettingsPanelView(discord.ui.View):
+class SettingsPanelView(_ExpiringView):
     def __init__(self, config: Config, bot):
-        super().__init__(timeout=180)
+        super().__init__(timeout=600)
         self.config = config
         self.bot = bot
 
@@ -725,9 +772,10 @@ class SettingsPanelView(discord.ui.View):
         await interaction.response.send_message(
             "Select a document to take down:", view=view, ephemeral=True
         )
+        view.message = await interaction.original_response()
 
 
-class ManageDocumentsView(discord.ui.View):
+class ManageDocumentsView(_ExpiringView):
     """Ephemeral view for taking down a previously published document."""
 
     def __init__(self, config: Config, bot, documents: dict[str, dict]):
