@@ -171,10 +171,15 @@ class FilingManager:
         transcript = self._build_transcript(spec, f"{member.mention} ({member.name})", record["answers"])
         content, overflowed = _truncate_for_discord(transcript)
         view = FilingReviewView(self.config, self.bot, filing_id, spec, record["signers"])
+        # Transcript embeds raw DM answers — suppress @everyone/@here/role/other-user
+        # mentions someone could try to sneak in via a free-text answer. The filer's
+        # own "Filed by:" mention is bot-constructed, not user free text, so it's
+        # explicitly allowed through.
         thread, first_msg = await forum.create_thread(
             name=f"{spec['title']} — {member.name}",
             content=content,
             view=view,
+            allowed_mentions=discord.AllowedMentions(everyone=False, users=[member], roles=False),
         )
         if overflowed:
             fp = io.BytesIO(transcript.encode("utf-8"))
@@ -242,6 +247,9 @@ class FilingManager:
                 f"You've been asked to sign as **{signer_spec['label']}** on a "
                 f"**{spec['title']}**, filed by {filer_label}.\n\n{content}",
                 view=SignerRequestView(filing_id, role, guild.id),
+                allowed_mentions=discord.AllowedMentions(
+                    everyone=False, users=[filer] if filer else [], roles=False
+                ),
             )
             if overflowed:
                 fp = io.BytesIO(transcript.encode("utf-8"))
