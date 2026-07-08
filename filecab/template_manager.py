@@ -68,11 +68,34 @@ class TemplateManager:
                 if not html_path.exists():
                     continue
                 spec["_html_path"] = html_path
+                self._infer_missing_fill_at(spec)
                 templates[template_id] = spec
             except (json.JSONDecodeError, KeyError, TypeError, OSError):
                 continue
         self._templates = templates
         return templates
+
+    @staticmethod
+    def _infer_missing_fill_at(spec: dict) -> None:
+        """Fill in "fill_at" on any "auto" field that doesn't already have one.
+
+        Templates aren't required to set this explicitly. When it's missing,
+        infer it from position relative to the first approval-time judge
+        field (the one real signal available): auto fields before that point
+        are due at submission, ones at/after it are due at approval. Mutates
+        the field dicts in place.
+        """
+        fields = spec.get("fields", [])
+        first_approval_judge_idx = next(
+            (i for i, f in enumerate(fields) if f.get("filled_by") == "judge" and f.get("prompt") is None),
+            None,
+        )
+        for i, field in enumerate(fields):
+            if field.get("filled_by") == "auto" and not field.get("fill_at"):
+                if first_approval_judge_idx is not None and i > first_approval_judge_idx:
+                    field["fill_at"] = "approval"
+                else:
+                    field["fill_at"] = "submission"
 
     def all_templates(self) -> dict[str, dict]:
         return self._templates

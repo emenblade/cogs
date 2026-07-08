@@ -181,20 +181,26 @@ class FilingManager:
         published[filing_id] = record
         await guild_conf.published_documents.set(published)
 
-    async def _refresh_review_message(self, guild: discord.Guild, record: dict, spec: dict) -> None:
-        """Re-render the review-forum message's view to reflect current signer state."""
-        from .views import FilingReviewView
-
-        thread_id = record.get("thread_id")
-        message_id = record.get("message_id")
-        if not thread_id or not message_id:
-            return
+    async def _get_thread(self, thread_id: int | None):
+        """Fetch a review-forum thread by id, falling back to the API if not cached."""
+        if not thread_id:
+            return None
         thread = self.bot.get_channel(thread_id)
         if thread is None:
             try:
                 thread = await self.bot.fetch_channel(thread_id)
             except discord.HTTPException:
-                return
+                return None
+        return thread
+
+    async def _refresh_review_message(self, guild: discord.Guild, record: dict, spec: dict) -> None:
+        """Re-render the review-forum message's view to reflect current signer state."""
+        from .views import FilingReviewView
+
+        message_id = record.get("message_id")
+        thread = await self._get_thread(record.get("thread_id"))
+        if not thread or not message_id:
+            return
         try:
             message = await thread.fetch_message(message_id)
         except discord.HTTPException:
@@ -284,8 +290,7 @@ class FilingManager:
         spec = self.templates.get(record["template_id"])
         await self._refresh_review_message(guild, record, spec)
 
-        thread_id = record.get("thread_id")
-        thread = self.bot.get_channel(thread_id) if thread_id else None
+        thread = await self._get_thread(record.get("thread_id"))
         if thread and spec:
             signer_spec = next((s for s in spec.get("signers", []) if s["role"] == role), None)
             label = signer_spec["label"] if signer_spec else role
@@ -386,7 +391,7 @@ class FilingManager:
         return True
 
     async def make_public(self, guild: discord.Guild, filing_id: str) -> str | None:
-        """Publish an approved, on-file document to the public site (stubbed)."""
+        """Publish an approved, on-file document to the public site."""
         guild_conf = self.config.guild(guild)
         published = await guild_conf.published_documents()
         record = published.get(filing_id)
@@ -402,13 +407,12 @@ class FilingManager:
         published[filing_id] = record
         await guild_conf.published_documents.set(published)
 
-        channel_id = await guild_conf.document_channel()
-        channel = guild.get_channel(channel_id) if channel_id else None
-        if channel is not None:
+        thread = await self._get_thread(record.get("thread_id"))
+        if thread is not None:
             if url:
-                await channel.send(f"📄 **{record['title']}** is now public — {url}")
+                await thread.send(f"📄 **{record['title']}** is now public — {url}")
             else:
-                await channel.send(
+                await thread.send(
                     f"📄 **{record['title']}** approved and on file (site publishing isn't wired up "
                     "yet, so it isn't live).",
                     file=discord.File(str(html_path)),
