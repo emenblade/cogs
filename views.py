@@ -4,7 +4,7 @@ from typing import Awaitable, Callable
 import discord
 from redbot.core import Config
 from .template_manager import TemplateManager
-from .utils import can_review
+from .utils import can_review, normalize_base_url
 
 
 def build_template_options(cog, include_staff_authored: bool = False) -> list[discord.SelectOption]:
@@ -202,7 +202,8 @@ class SiteRepoModal(discord.ui.Modal, title="Site Repository"):
         branch = self.branch.value.strip() or "main"
         await self.config.site_repo.set(repo_value)
         await self.config.site_branch.set(branch)
-        await self.config.site_base_url.set(self.base_url.value.strip() or None)
+        base_url_value = self.base_url.value.strip()
+        await self.config.site_base_url.set(normalize_base_url(base_url_value) if base_url_value else None)
 
         cog = interaction.client.cogs["Filecab"]
         owner, repo = repo_value.split("/", 1)
@@ -609,7 +610,11 @@ class ApprovedDocumentView(discord.ui.View):
         button.label = "✅ Published"
         await interaction.message.edit(view=self)
         if url:
-            await interaction.followup.send(f"🌐 Published — {url}", ephemeral=True)
+            await interaction.followup.send(
+                f"🌐 Pushed — {url}\nAnnouncing it live in the thread in a couple minutes, "
+                "once the site's finished rebuilding.",
+                ephemeral=True,
+            )
         else:
             await interaction.followup.send(
                 "🌐 Marked published, but site publishing isn't wired up yet — announced locally only.",

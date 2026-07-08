@@ -1,5 +1,6 @@
 """DM Q&A filing flow, multi-signer handoff, approval, and publish/takedown."""
 from __future__ import annotations
+import asyncio
 import io
 from datetime import date, datetime
 import discord
@@ -7,6 +8,10 @@ from redbot.core import Config
 from redbot.core.bot import Red
 from .template_manager import TemplateManager
 from .publisher import DocumentPublisher
+
+# How long to wait before announcing a filing is live, so the site's GitHub
+# Action has time to rebuild/deploy before anyone clicks the link.
+PUBLISH_ANNOUNCE_DELAY_SECONDS = 120
 
 
 def _today() -> str:
@@ -410,7 +415,10 @@ class FilingManager:
         thread = await self._get_thread(record.get("thread_id"))
         if thread is not None:
             if url:
-                await thread.send(f"📄 **{record['title']}** is now public — {url}")
+                # Give the site's GitHub Action time to rebuild before telling anyone
+                # it's live — don't block the caller (staff already got their own
+                # confirmation) waiting on this.
+                self.bot.loop.create_task(self._announce_live(thread, record["title"], url))
             else:
                 await thread.send(
                     f"📄 **{record['title']}** approved and on file (site publishing isn't wired up "
@@ -418,6 +426,14 @@ class FilingManager:
                     file=discord.File(str(html_path)),
                 )
         return url
+
+    @staticmethod
+    async def _announce_live(thread, title: str, url: str) -> None:
+        await asyncio.sleep(PUBLISH_ANNOUNCE_DELAY_SECONDS)
+        try:
+            await thread.send(f"📄 **{title}** is now public — {url}")
+        except discord.HTTPException:
+            pass
 
     async def takedown(self, guild: discord.Guild, filing_id: str) -> bool:
         """Remove a filed document: delete the local files and call unpublish (stub) if it was live."""

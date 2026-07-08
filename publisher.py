@@ -10,6 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 from redbot.core import Config
 from .github_client import GitHubClient
+from .utils import normalize_base_url
 
 
 class DocumentPublisher:
@@ -28,7 +29,7 @@ class DocumentPublisher:
 
     async def _base_url(self, owner: str, repo: str) -> str:
         base_url = await self.config.site_base_url()
-        return base_url.rstrip("/") if base_url else f"https://{owner}.github.io/{repo}"
+        return normalize_base_url(base_url) if base_url else f"https://{owner}.github.io/{repo}"
 
     async def publish(self, html_path: Path, json_path: Path, template_id: str, filing_id: str) -> str | None:
         """Push a filing's rendered HTML + sidecar JSON to the documents site.

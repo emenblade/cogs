@@ -18,6 +18,18 @@ def render_template(html: str, answers: dict[str, str]) -> str:
     return _PLACEHOLDER_RE.sub(_sub, html)
 
 
+def normalize_base_url(url: str) -> str:
+    """Ensure a base URL has an http(s) scheme, so Discord renders it as a clickable link.
+
+    A bare domain like "lcrpfilecab.emen.win" isn't auto-linked by Discord —
+    only strings starting with a recognized scheme are.
+    """
+    url = url.strip().rstrip("/")
+    if url and not re.match(r"^https?://", url, re.IGNORECASE):
+        url = f"https://{url}"
+    return url
+
+
 def slugify(text: str, max_length: int = 60, fallback: str = "document") -> str:
     """Return a filesystem/URL-safe slug (lowercase, hyphens, truncated)."""
     text = text.lower().replace(" ", "-")
