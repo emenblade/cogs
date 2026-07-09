@@ -110,7 +110,20 @@ they get an ephemeral "you don't have permission" reply instead of a DM.
 that command is already staff/admin-only, so the gate would be redundant
 there. Settings → **Template Access** manages the mapping: pick a template,
 then either select role(s) via a `RoleSelect` (replaces the set) or hit
-**Open to Everyone** to clear it back to unrestricted.
+**Open to Everyone** to clear it back to unrestricted. Only citizen-facing
+templates are offered — gating a staff-authored one would be dead
+configuration, since `filecab file` always bypasses the gate.
+
+`SettingsPanelView` and `StaffFileSelectView` both override
+`interaction_check` to re-validate staff/admin on every click, matching the
+per-click checks the review-forum views already used. This matters because
+`filecab_settings`/`filecab_file` send their view via `ctx.send(...,
+ephemeral=True)`, and Red's hybrid commands silently drop `ephemeral` when
+invoked with a text prefix instead of a slash command — without the
+re-check, a prefix invocation would leave the settings panel (with its
+permanent-delete and access-reconfiguration actions) visible and clickable
+to any member, and would let anyone reach `filecab file`'s
+`enforce_gate=False` path and bypass template gates entirely.
 
 ## Filing lifecycle
 

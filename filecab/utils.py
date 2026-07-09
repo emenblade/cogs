@@ -71,12 +71,9 @@ async def can_file_template(interaction: discord.Interaction, allowed_role_ids: 
 
     An empty `allowed_role_ids` means the template isn't gated at all —
     callers should skip calling this and just allow it. Admins always bypass
-    the gate.
+    the gate; staff without Administrator still need to use `filecab file`
+    (which bypasses gates entirely) rather than the public panel.
     """
     if interaction.user.guild_permissions.administrator:
         return True
-    roles = getattr(interaction.user, "roles", None)
-    if not roles:
-        return False
-    allowed = set(allowed_role_ids)
-    return any(r.id in allowed for r in roles)
+    return any(check_staff_role(interaction, role_id) for role_id in allowed_role_ids)

@@ -480,13 +480,8 @@ class FilingManager:
             return False
 
         if record["status"] in ("approved", "published"):
-            html_path = self.templates.documents_path / record["template_id"] / f"{filing_id}.html"
-            json_path = self.templates.documents_path / record["template_id"] / f"{filing_id}.json"
-            for path in (html_path, json_path):
-                if path.exists():
-                    path.unlink()
-            if record["status"] == "published":
-                await self.publisher.unpublish(record["template_id"], filing_id)
+            await self.takedown(guild, filing_id)
+            published = await guild_conf.published_documents()
 
         del published[filing_id]
         await guild_conf.published_documents.set(published)
