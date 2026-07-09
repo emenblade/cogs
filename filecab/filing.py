@@ -139,6 +139,7 @@ class FilingManager:
             "answers": full_answers,
             "filed_date": _today(),
             "status": "pending",
+            "discussion": [],
         }
         await self._post_review(member, guild, spec, filing_id, record)
 
@@ -150,16 +151,23 @@ class FilingManager:
         filing_id: str,
         record: dict,
     ) -> None:
-        """Post a Q&A transcript + Approve/Deny/Assign view to the review forum."""
+        """Post a Q&A transcript + Approve/Deny/Assign view to a private review thread.
+
+        The thread is private and the filer is added to it directly — they can see
+        and post in their own filing's thread (so staff can ask follow-up questions
+        like a support ticket) but have no visibility into any other filing's thread,
+        since that isolation comes from Discord's private-thread membership rather
+        than anything the bot has to enforce itself.
+        """
         from .views import FilingReviewView
 
         guild_conf = self.config.guild(guild)
-        forum_id = await guild_conf.document_review_forum()
-        forum = guild.get_channel(forum_id) if forum_id else None
-        if not forum or not isinstance(forum, discord.ForumChannel):
+        channel_id = await guild_conf.document_review_channel()
+        channel = guild.get_channel(channel_id) if channel_id else None
+        if not channel or not isinstance(channel, discord.TextChannel):
             await member.send(
-                "⚠️ Your filing was completed but staff haven't configured a review forum yet — "
-                "please let them know so it can be processed."
+                "⚠️ Your filing was completed but staff haven't configured a review channel "
+                "yet — please let them know so it can be processed."
             )
             return
 
@@ -171,12 +179,18 @@ class FilingManager:
         transcript = self._build_transcript(spec, f"{member.mention} ({member.name})", record["answers"])
         content, overflowed = _truncate_for_discord(transcript)
         view = FilingReviewView(self.config, self.bot, filing_id, spec, record["signers"])
+
+        thread = await channel.create_thread(
+            name=f"{spec['title']} — {member.name}"[:100],
+            invitable=False,
+            reason=f"Filecab review thread for {filing_id}",
+        )
+        await thread.add_user(member)
         # Transcript embeds raw DM answers — suppress @everyone/@here/role/other-user
         # mentions someone could try to sneak in via a free-text answer. The filer's
         # own "Filed by:" mention is bot-constructed, not user free text, so it's
         # explicitly allowed through.
-        thread, first_msg = await forum.create_thread(
-            name=f"{spec['title']} — {member.name}",
+        first_msg = await thread.send(
             content=content,
             view=view,
             allowed_mentions=discord.AllowedMentions(everyone=False, users=[member], roles=False),
@@ -192,7 +206,7 @@ class FilingManager:
         await guild_conf.published_documents.set(published)
 
     async def _get_thread(self, thread_id: int | None):
-        """Fetch a review-forum thread by id, falling back to the API if not cached."""
+        """Fetch a review thread by id, falling back to the API if not cached."""
         if not thread_id:
             return None
         thread = self.bot.get_channel(thread_id)
@@ -204,7 +218,7 @@ class FilingManager:
         return thread
 
     async def _refresh_review_message(self, guild: discord.Guild, record: dict, spec: dict) -> None:
-        """Re-render the review-forum message's view to reflect current signer state."""
+        """Re-render the review-thread message's view to reflect current signer state."""
         from .views import FilingReviewView
 
         message_id = record.get("message_id")
@@ -217,6 +231,35 @@ class FilingManager:
             return
         view = FilingReviewView(self.config, self.bot, record["filing_id"], spec, record.get("signers", {}))
         await message.edit(view=view)
+
+    async def log_thread_message(
+        self, guild: discord.Guild, thread: discord.Thread, message: discord.Message
+    ) -> None:
+        """Persist a human message posted in a filing's private review thread.
+
+        Discord isolation (the filer only being a member of their own thread)
+        already keeps the conversation scoped correctly — this just keeps a
+        durable copy in config so the discussion survives even if the thread
+        is later archived or deleted.
+        """
+        guild_conf = self.config.guild(guild)
+        review_channel_id = await guild_conf.document_review_channel()
+        if not review_channel_id or thread.parent_id != review_channel_id:
+            return
+
+        published = await guild_conf.published_documents()
+        record = next((r for r in published.values() if r.get("thread_id") == thread.id), None)
+        if record is None:
+            return
+
+        record.setdefault("discussion", []).append({
+            "author_id": message.author.id,
+            "author_label": f"{message.author.display_name} ({message.author.name})",
+            "content": message.content,
+            "at": datetime.now().isoformat(timespec="seconds"),
+        })
+        published[record["filing_id"]] = record
+        await guild_conf.published_documents.set(published)
 
     async def assign_signer(
         self, guild: discord.Guild, filing_id: str, role: str, member: discord.abc.User

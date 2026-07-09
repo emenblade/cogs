@@ -7,9 +7,10 @@ once staff sign off.
 
 ## Architecture
 
-- `filecab.py` — the `Filecab` cog: Config schema, the `on_message` DM
-  router, persistent-view re-registration, and the `filecab` command group
-  (`setup`, `settings`, `file`, `templates`, `refresh`).
+- `filecab.py` — the `Filecab` cog: Config schema, the `on_message` router
+  (DMs during filing, plus logging review-thread conversation), persistent-
+  view re-registration, and the `filecab` command group (`setup`, `settings`,
+  `file`, `templates`, `refresh`).
 - `github_client.py` — `GitHubClient`, a thin `aiohttp` wrapper around the
   GitHub REST API (list/get/put/delete file contents). Token comes from
   Red's own shared API tokens (`[p]set api github token,<token>`), not
@@ -20,7 +21,7 @@ once staff sign off.
   `filecab refresh`) — see `docs/SITE_REPO_CONTRACT.md` for the schema that
   repo's `templates/` folder must follow.
 - `filing.py` — `FilingManager` runs the DM Q&A flow, mints filing ids, posts
-  pending filings to the staff review forum, handles approve/deny, and
+  pending filings to a private review thread, handles approve/deny, and
   publishes/takes down on explicit staff action.
 - `publisher.py` — `DocumentPublisher`, pushes/removes filings on the
   configured site repo via `GitHubClient`.
@@ -145,7 +146,7 @@ configuration, since `filecab file` always bypasses the gate.
 
 `SettingsPanelView` and `StaffFileSelectView` both override
 `interaction_check` to re-validate staff/admin on every click, matching the
-per-click checks the review-forum views already used. This matters because
+per-click checks the review-thread views already used. This matters because
 `filecab_settings`/`filecab_file` send their view via `ctx.send(...,
 ephemeral=True)`, and Red's hybrid commands silently drop `ephemeral` when
 invoked with a text prefix instead of a slash command — without the
@@ -166,10 +167,16 @@ handoff signer role has signed.
    date → a `filing_id` (`<template_id>-<year>-<seq>`, from the global
    per-template-per-year counter in `filing_counters`) is minted → the
    filing's `signers` map is seeded (one `{user_id: null, status:
-   "unassigned", dm_message_id: null}` entry per handoff role) → a review
-   thread is posted to the review forum with the Q&A transcript and
-   `FilingReviewView` (one "➕ Assign X" button per handoff role, plus
-   Approve/Deny). Status: `pending`. Nothing is rendered yet.
+   "unassigned", dm_message_id: null}` entry per handoff role) → a **private**
+   thread is created in the configured review channel with the Q&A
+   transcript and `FilingReviewView` (one "➕ Assign X" button per handoff
+   role, plus Approve/Deny), and the filer is added to it directly
+   (`Thread.add_user`, `invitable=False` so only staff with Manage Messages
+   can add anyone else) — they can see and post in their own filing's
+   thread, like a support ticket, but have no access to any other filing's
+   thread; that isolation is Discord's own private-thread membership model,
+   not something the bot enforces. Status: `pending`. Nothing is rendered
+   yet.
 2. **Assign** (staff click "➕ Assign Witness" etc.) → permission-checked, then
    an ephemeral `UserSelect` — no @-mention typing, since DMs can't resolve
    mentions — picking a member calls `FilingManager.assign_signer`, which DMs
@@ -211,6 +218,16 @@ handoff signer role has signed.
    non-`pending` filing (any status), not just published ones, so denied or
    already-taken-down filings can be purged too.
 
+Throughout all of the above, staff and the filer can talk directly in the
+filing's private thread — there's no dedicated "ask a question" button,
+it's just a normal Discord conversation once the filer's been added.
+`Filecab.on_message` picks up every human message posted there (matched by
+`thread.parent_id` == the configured review channel, then `thread_id` on
+the filing record) via `FilingManager.log_thread_message`, and appends it to
+that filing's `discussion` list in config — a durable copy of the
+conversation that outlives the thread itself if it's later archived or the
+channel is reconfigured.
+
 ## Persistence & restart safety
 
 Discord buttons/selects stop working after a process restart unless the bot
@@ -218,7 +235,7 @@ re-registers a matching view (same custom IDs) against the still-live
 message before anyone clicks them again — `discord.py` doesn't remember
 views across restarts on its own. Exactly four views in this cog are
 long-lived enough to need that: `TemplateSelectView` (the document panel),
-`FilingReviewView` (review-forum post), `SignerRequestView` (DM'd to a
+`FilingReviewView` (review-thread post), `SignerRequestView` (DM'd to a
 handoff signer), and `ApprovedDocumentView` (post-approval "Make Public").
 Everything else — the setup wizard, the settings panel and everything it
 opens (Template Access, Manage Documents, and their sub-views),
@@ -268,17 +285,20 @@ that push — filecab doesn't maintain any index itself.
 
 ## Config schema
 
-- **Guild**: `document_channel`, `document_review_forum`, `approval_role`,
-  `panel_message_id`, `published_documents` (dict of `filing_id` →
-  `{template_id, title, category, user_id, answers, filed_date, status,
-  thread_id?, message_id?, signers, approved_by?, signed_date?, signed_by?,
-  html_path?, json_path?, published_url?}`, used for persistent-view
-  re-registration and the takedown command). `signers` is itself a dict of
-  `role` → `{user_id, status, dm_message_id}` (`status` ∈ `unassigned |
-  pending | signed | declined`), one entry per handoff-required signer role.
-  `template_access` (dict of `template_id` → `[role_id, ...]`; a template
-  missing from this dict, or mapped to an empty list, is open to everyone —
-  see "Filing access gates" above).
+- **Guild**: `document_channel`, `document_review_channel` (a text channel —
+  each filing gets its own private thread inside it, see "Filing lifecycle"),
+  `approval_role`, `panel_message_id`, `published_documents` (dict of
+  `filing_id` → `{template_id, title, category, user_id, answers, filed_date,
+  status, thread_id?, message_id?, signers, discussion, approved_by?,
+  signed_date?, signed_by?, html_path?, json_path?, published_url?}`, used
+  for persistent-view re-registration and the takedown command). `signers`
+  is itself a dict of `role` → `{user_id, status, dm_message_id}` (`status`
+  ∈ `unassigned | pending | signed | declined`), one entry per
+  handoff-required signer role. `discussion` is a list of `{author_id,
+  author_label, content, at}`, one entry per human message posted in the
+  filing's private review thread. `template_access` (dict of `template_id`
+  → `[role_id, ...]`; a template missing from this dict, or mapped to an
+  empty list, is open to everyone — see "Filing access gates" above).
 - **User**: `active_filing` (`{"template_id", "guild_id", "field_index",
   "answers"}`), the in-progress DM Q&A state.
 - **Global**: `filing_counters` (`{"<template_id>-<year>": int}`, backing the

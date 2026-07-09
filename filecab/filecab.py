@@ -26,13 +26,16 @@ class Filecab(commands.Cog):
         """Register config defaults, load templates, and re-register persistent views."""
         self.config.register_guild(
             document_channel=None,
-            document_review_forum=None,
+            document_review_channel=None,
             approval_role=None,
             panel_message_id=None,
             published_documents={},
             # {filing_id: {template_id, title, category, user_id, answers, filed_date, status,
-            #              thread_id?, message_id?, approved_by?, signed_date?, signed_by?,
-            #              html_path?, json_path?, published_url?}}
+            #              thread_id?, message_id?, discussion, approved_by?, signed_date?,
+            #              signed_by?, html_path?, json_path?, published_url?}}
+            # discussion is a list of {author_id, author_label, content, at} — every human
+            # message posted in the filing's private review thread (filer included), kept
+            # even if the thread itself is later archived/deleted.
             template_access={},
             # {template_id: [role_id, ...]} — templates not listed here (or
             # mapped to an empty list) are open to everyone. Only checked on
@@ -106,23 +109,28 @@ class Filecab(commands.Cog):
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:
-        """Route DM replies to the document filing flow."""
-        if message.guild is not None or message.author.bot:
+        """Route DM replies to the filing flow, and log review-thread conversation."""
+        if message.author.bot:
             return
 
-        state = await self.config.user(message.author).active_filing()
-        if state is None:
+        if message.guild is None:
+            state = await self.config.user(message.author).active_filing()
+            if state is None:
+                return
+
+            guild = self.bot.get_guild(state["guild_id"])
+            if guild is None:
+                return
+
+            member = guild.get_member(message.author.id)
+            if member is None:
+                return
+
+            await self.filing.handle_reply(member, guild, state, message)
             return
 
-        guild = self.bot.get_guild(state["guild_id"])
-        if guild is None:
-            return
-
-        member = guild.get_member(message.author.id)
-        if member is None:
-            return
-
-        await self.filing.handle_reply(member, guild, state, message)
+        if isinstance(message.channel, discord.Thread) and message.type == discord.MessageType.default:
+            await self.filing.log_thread_message(message.guild, message.channel, message)
 
     def _is_staff(self, ctx: commands.Context, approval_role_id: int | None) -> bool:
         if ctx.author.guild_permissions.administrator:
@@ -148,8 +156,13 @@ class Filecab(commands.Cog):
         Walks through a 4-step interactive wizard:
 
         Step 1 — Document channel: where the document-type select panel is posted.
-        Step 2 — Review forum: the forum channel where pending filings are posted
-                  with Approve/Deny buttons.
+        Step 2 — Review channel: a text channel where each filing gets its own
+                  private thread with Approve/Deny buttons. The filer is added to
+                  their own thread so staff can ask follow-up questions directly —
+                  they can't see any other filing's thread. The bot needs the
+                  **Create Private Threads** permission there, and staff need
+                  **Manage Threads** on that channel to see every filing's thread
+                  without being added to each one individually.
         Step 3 — Approval role: who (besides admins) can approve/deny filings and
                   make them public.
         Step 4 — Site repository: the GitHub repo (`owner/repo`) that serves as
@@ -177,7 +190,7 @@ class Filecab(commands.Cog):
     async def filecab_settings(self, ctx: commands.Context) -> None:
         """Open the settings panel (staff and admins).
 
-        Lets you change the document channel, review forum, approval role, and
+        Lets you change the document channel, review channel, approval role, and
         site repository; reload templates already on disk; re-post the document
         panel; restrict which roles can file particular templates; and take
         down or permanently delete previously filed documents. Use `filecab

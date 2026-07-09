@@ -89,7 +89,12 @@ class WizardStep1View(_WizardStepView):
         view.message = interaction.message
         embed = discord.Embed(
             title="Filecab Setup — Step 2 of 4",
-            description="Select the **staff review forum** where pending filings are posted for Approve/Deny.",
+            description=(
+                "Select the **review channel** — a text channel where each filing gets its "
+                "own private thread with Approve/Deny buttons, and the filer is added to "
+                "their own thread (but no others). The bot needs **Create Private Threads** "
+                "there; staff need **Manage Threads** to see every filing's thread."
+            ),
             color=discord.Color.blurple(),
         )
         await interaction.response.edit_message(embed=embed, view=view)
@@ -101,12 +106,12 @@ class WizardStep1View(_WizardStepView):
 
 
 class WizardStep2View(_WizardStepView):
-    """Step 2: select the staff review forum."""
+    """Step 2: select the review channel (a text channel — filings get private threads in it)."""
 
     @discord.ui.select(
         cls=discord.ui.ChannelSelect,
-        placeholder="Select the review forum…",
-        channel_types=[discord.ChannelType.forum],
+        placeholder="Select the review channel…",
+        channel_types=[discord.ChannelType.text],
     )
     async def channel_select(self, interaction: discord.Interaction, select: discord.ui.ChannelSelect):
         self._selected = select.values[0]
@@ -115,9 +120,9 @@ class WizardStep2View(_WizardStepView):
     @discord.ui.button(label="Confirm", style=discord.ButtonStyle.green)
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
         if self._selected is None:
-            await interaction.response.send_message("⚠️ Please select a forum first.", ephemeral=True)
+            await interaction.response.send_message("⚠️ Please select a channel first.", ephemeral=True)
             return
-        await self.config.guild_from_id(self.guild_id).document_review_forum.set(self._selected.id)
+        await self.config.guild_from_id(self.guild_id).document_review_channel.set(self._selected.id)
         self.stop()
         view = WizardStep3View(self.config, self.guild_id, self.bot)
         view.message = interaction.message
@@ -403,7 +408,7 @@ async def _start_filing_from_select(
 
 
 # ---------------------------------------------------------------------------
-# Review forum (persistent): pending (+ signer handoff) -> approved -> published
+# Review channel (persistent): pending (+ signer handoff) -> approved -> published
 # ---------------------------------------------------------------------------
 
 class SignatureFieldsModal(discord.ui.Modal):
@@ -472,7 +477,7 @@ def _assign_button_appearance(label: str, state: dict) -> tuple[discord.ButtonSt
 
 
 class _AssignButton(discord.ui.Button):
-    """One button per handoff signer role on the review-forum post."""
+    """One button per handoff signer role on the review-thread post."""
 
     def __init__(self, filing_id: str, role: str, label: str, state: dict):
         style, text, disabled = _assign_button_appearance(label, state)
@@ -532,7 +537,7 @@ class _AssignUserSelectView(_ExpiringView):
 
 
 class FilingReviewView(discord.ui.View):
-    """Review-forum view: one Assign button per handoff signer role, plus Approve/Deny.
+    """Review-thread view: one Assign button per handoff signer role, plus Approve/Deny.
 
     Approve is disabled until every handoff role has signed. `spec` can be
     None — the filing's template was deleted from the site repo since it was
@@ -720,7 +725,7 @@ class SettingsPanelView(_ExpiringView):
     hybrid commands silently drop `ephemeral` when invoked with a text prefix rather
     than a slash command — the panel would otherwise be visible (and clickable) to
     any member in the channel. `interaction_check` re-validates staff/admin on every
-    click, matching the per-click checks already used on the review-forum views.
+    click, matching the per-click checks already used on the review-thread views.
     """
 
     def __init__(self, config: Config, bot):
@@ -751,14 +756,14 @@ class SettingsPanelView(_ExpiringView):
 
     @discord.ui.select(
         cls=discord.ui.ChannelSelect,
-        placeholder="Change review forum…",
-        channel_types=[discord.ChannelType.forum],
+        placeholder="Change review channel…",
+        channel_types=[discord.ChannelType.text],
         row=1,
     )
-    async def change_forum(self, interaction: discord.Interaction, select: discord.ui.ChannelSelect):
-        await self.config.guild(interaction.guild).document_review_forum.set(select.values[0].id)
+    async def change_review_channel(self, interaction: discord.Interaction, select: discord.ui.ChannelSelect):
+        await self.config.guild(interaction.guild).document_review_channel.set(select.values[0].id)
         await interaction.response.send_message(
-            f"✅ Review forum set to {select.values[0].mention}.", ephemeral=True
+            f"✅ Review channel set to {select.values[0].mention}.", ephemeral=True
         )
 
     @discord.ui.select(
