@@ -94,7 +94,7 @@ class WizardStep1View(_WizardStepView):
         )
         await interaction.response.edit_message(embed=embed, view=view)
 
-    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.red)
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.grey)
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.stop()
         await interaction.response.edit_message(content="❌ Setup cancelled.", view=None, embed=None)
@@ -131,7 +131,7 @@ class WizardStep2View(_WizardStepView):
         )
         await interaction.response.edit_message(embed=embed, view=view)
 
-    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.red)
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.grey)
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.stop()
         await interaction.response.edit_message(content="❌ Setup cancelled.", view=None, embed=None)
@@ -148,7 +148,7 @@ class WizardStep3View(_WizardStepView):
         self._selected = select.values[0]
         await interaction.response.defer()
 
-    @discord.ui.button(label="Continue", style=discord.ButtonStyle.green)
+    @discord.ui.button(label="Confirm", style=discord.ButtonStyle.green)
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
         guild_conf = self.config.guild_from_id(self.guild_id)
         await guild_conf.approval_role.set(self._selected.id if self._selected else None)
@@ -168,7 +168,7 @@ class WizardStep3View(_WizardStepView):
         )
         await interaction.response.edit_message(embed=embed, view=view)
 
-    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.red)
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.grey)
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.stop()
         await interaction.response.edit_message(content="❌ Setup cancelled.", view=None, embed=None)
@@ -247,7 +247,7 @@ class WizardStep4View(_WizardStepView):
 
         await interaction.response.send_modal(SiteRepoModal(self.config, on_done=_on_done))
 
-    @discord.ui.button(label="Skip for now", style=discord.ButtonStyle.grey)
+    @discord.ui.button(label="Skip for Now", style=discord.ButtonStyle.grey)
     async def skip(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
         await self._finish(interaction, interaction.message, None, 0, "")
@@ -284,7 +284,7 @@ class WizardStep4View(_WizardStepView):
             )
         await interaction.followup.send("\n".join(parts), ephemeral=True)
 
-    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.red)
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.grey)
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.stop()
         await interaction.response.edit_message(content="❌ Setup cancelled.", view=None, embed=None)
@@ -468,7 +468,7 @@ def _assign_button_appearance(label: str, state: dict) -> tuple[discord.ButtonSt
         return discord.ButtonStyle.grey, f"⏳ {label}: awaiting reply", True
     if status == "declined":
         return discord.ButtonStyle.red, f"🔁 Reassign {label}", False
-    return discord.ButtonStyle.blurple, f"Assign {label}", False
+    return discord.ButtonStyle.blurple, f"➕ Assign {label}", False
 
 
 class _AssignButton(discord.ui.Button):
@@ -534,10 +534,15 @@ class _AssignUserSelectView(_ExpiringView):
 class FilingReviewView(discord.ui.View):
     """Review-forum view: one Assign button per handoff signer role, plus Approve/Deny.
 
-    Approve is disabled until every handoff role has signed.
+    Approve is disabled until every handoff role has signed. `spec` can be
+    None — the filing's template was deleted from the site repo since it was
+    filed — in which case Approve is force-disabled (there's no schema left
+    to safely collect judge fields or render the document) and no Assign
+    buttons are shown, but Deny still works, so a restart doesn't strand the
+    filing with an entirely dead review post.
     """
 
-    def __init__(self, config: Config, bot, filing_id: str, spec: dict, signers_state: dict):
+    def __init__(self, config: Config, bot, filing_id: str, spec: dict | None, signers_state: dict):
         super().__init__(timeout=None)
         self.config = config
         self.bot = bot
@@ -546,10 +551,15 @@ class FilingReviewView(discord.ui.View):
 
         self.children[0].custom_id = f"filecab:approve:{filing_id}"
         self.children[1].custom_id = f"filecab:deny:{filing_id}"
+
+        if spec is None:
+            self.children[0].disabled = True
+            self.children[0].label = "⚠️ Template Missing"
+            return
+
         self.children[0].disabled = not all(
             s.get("status") == "signed" for s in signers_state.values()
         )
-
         for signer in TemplateManager.handoff_signers(spec):
             role = signer["role"]
             state = signers_state.get(role, {"status": "unassigned"})
@@ -686,6 +696,7 @@ class ApprovedDocumentView(discord.ui.View):
         url = await cog.filing.make_public(interaction.guild, self.filing_id)
         button.disabled = True
         button.label = "✅ Published"
+        button.style = discord.ButtonStyle.green
         await interaction.message.edit(view=self)
         if url:
             await interaction.followup.send(
@@ -761,7 +772,7 @@ class SettingsPanelView(_ExpiringView):
             f"✅ Approval role set to {select.values[0].mention}.", ephemeral=True
         )
 
-    @discord.ui.button(label="Reload Templates", style=discord.ButtonStyle.blurple, row=3)
+    @discord.ui.button(label="🔄 Reload Templates", style=discord.ButtonStyle.blurple, row=3)
     async def reload_templates(self, interaction: discord.Interaction, button: discord.ui.Button):
         cog = interaction.client.cogs["Filecab"]
         templates = cog.templates.reload()
@@ -773,7 +784,7 @@ class SettingsPanelView(_ExpiringView):
             f"🔄 Reloaded. **{len(templates)}** template(s) loaded:\n{listing}", ephemeral=True
         )
 
-    @discord.ui.button(label="Refresh Templates from Repo", style=discord.ButtonStyle.blurple, row=3)
+    @discord.ui.button(label="🔄 Refresh Templates from Repo", style=discord.ButtonStyle.blurple, row=3)
     async def refresh_templates(self, interaction: discord.Interaction, button: discord.ui.Button):
         cog = interaction.client.cogs["Filecab"]
         site_repo = await self.config.site_repo()
@@ -914,7 +925,7 @@ class TemplateGateRoleView(_ExpiringView):
             content=f"✅ **{self.title}** is now restricted to: {mentions}", view=None
         )
 
-    @discord.ui.button(label="Open to Everyone", style=discord.ButtonStyle.red, row=1)
+    @discord.ui.button(label="Open to Everyone", style=discord.ButtonStyle.grey, row=1)
     async def clear(self, interaction: discord.Interaction, button: discord.ui.Button):
         async with self.config.guild(interaction.guild).template_access() as access:
             access.pop(self.template_id, None)
@@ -1012,7 +1023,7 @@ class _ConfirmDeleteView(_ExpiringView):
         self.filing_id = filing_id
         self.title = title
 
-    @discord.ui.button(label="Confirm Delete", style=discord.ButtonStyle.red)
+    @discord.ui.button(label="❌ Confirm Delete", style=discord.ButtonStyle.red)
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
         cog = interaction.client.cogs["Filecab"]
         ok = await cog.filing.purge(interaction.guild, self.filing_id)

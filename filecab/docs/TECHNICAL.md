@@ -32,6 +32,35 @@ once staff sign off.
   settings panel (including template access gating and document
   takedown/delete).
 
+## UI conventions
+
+All buttons across `views.py` follow one color/emoji scheme, so a new button
+should match rather than invent its own:
+
+- **Green** — confirm / positive / completed (`Confirm` in the setup wizard,
+  `✅ Approve`, `✅ Sign`, a signer's `✅ {label}: signed` state, `✅ Published`
+  once Make Public succeeds).
+- **Red** — destructive / negative outcome (`❌ Deny`, `❌ Decline`,
+  `❌ Delete Permanently`, `❌ Confirm Delete`, a declined signer's
+  `🔁 Reassign {label}` state).
+- **Blurple** — a primary, non-destructive action (`Set Site Repository`,
+  `🔄 Reload Templates`, `🔄 Refresh Templates from Repo`, `Change Site Repo`,
+  `Repost Panel`, `🌐 Make Public`, an unassigned signer's `➕ Assign {label}`
+  state).
+- **Grey** — secondary / navigational / "opens another menu" (`Cancel`,
+  `Skip for Now`, `Template Access`, `Manage Documents`, `Open to Everyone`,
+  `🗑️ Take Down`, a pending signer's `⏳ {label}: awaiting reply` state).
+
+`Cancel` is always grey, never red — red is reserved for an action that
+actually denies/declines/deletes something, and using it for a plain abort
+would dilute that signal. Emoji are reserved for buttons that represent a
+concrete document/filing action with a natural icon (approve, deny, sign,
+decline, publish, delete, take down, (re)assign) or that match an emoji
+their own result message already uses (`🔄` on the two template-refresh
+buttons, matching their own "🔄 Reloaded…"/"🔄 Fetched…" replies); generic
+navigation/admin buttons (`Confirm`, `Cancel`, `Change Site Repo`, `Template
+Access`, `Manage Documents`, …) stay plain text.
+
 ## Template format
 
 See **`docs/SITE_REPO_CONTRACT.md`** for the full, formal schema (this is the
@@ -139,9 +168,9 @@ handoff signer role has signed.
    filing's `signers` map is seeded (one `{user_id: null, status:
    "unassigned", dm_message_id: null}` entry per handoff role) → a review
    thread is posted to the review forum with the Q&A transcript and
-   `FilingReviewView` (one "Assign X" button per handoff role, plus
+   `FilingReviewView` (one "➕ Assign X" button per handoff role, plus
    Approve/Deny). Status: `pending`. Nothing is rendered yet.
-2. **Assign** (staff click "Assign Witness" etc.) → permission-checked, then
+2. **Assign** (staff click "➕ Assign Witness" etc.) → permission-checked, then
    an ephemeral `UserSelect` — no @-mention typing, since DMs can't resolve
    mentions — picking a member calls `FilingManager.assign_signer`, which DMs
    them the transcript + a persistent `SignerRequestView` (Sign/Decline),
@@ -164,13 +193,16 @@ handoff signer role has signed.
    awaiting a reply, so nobody can sign a dead filing. Status: `denied`.
 6. **Make Public** (separate, whenever staff are ready) → calls
    `DocumentPublisher.publish()` (stub) and announces in the document
-   channel. Status: `published`.
+   channel; on success the button relabels to a disabled, green
+   "✅ Published" (matching the "completed" color used elsewhere) and stays
+   that way permanently — see "Persistence & restart safety" for why it
+   doesn't need re-registration after a restart. Status: `published`.
 7. **Take Down** (settings panel → Manage Documents → a filing → 🗑️ Take
    Down) → deletes the local files, calls `unpublish()` if it was live.
    Status: `removed`. The record itself is kept (title, answers, audit
    trail) — only the rendered/live copies are gone.
 8. **Delete Permanently** (settings panel → Manage Documents → a filing →
-   ❌ Delete Permanently → Confirm Delete) → same cleanup as Take Down if the
+   ❌ Delete Permanently → ❌ Confirm Delete) → same cleanup as Take Down if the
    filing was still `approved`/`published`, then erases the guild config
    record entirely (`FilingManager.purge`). Irreversible; gated behind an
    extra confirmation step since it drops the stored answers for good.
@@ -178,6 +210,46 @@ handoff signer role has signed.
    never loses the record it's referencing. Manage Documents lists every
    non-`pending` filing (any status), not just published ones, so denied or
    already-taken-down filings can be purged too.
+
+## Persistence & restart safety
+
+Discord buttons/selects stop working after a process restart unless the bot
+re-registers a matching view (same custom IDs) against the still-live
+message before anyone clicks them again — `discord.py` doesn't remember
+views across restarts on its own. Exactly four views in this cog are
+long-lived enough to need that: `TemplateSelectView` (the document panel),
+`FilingReviewView` (review-forum post), `SignerRequestView` (DM'd to a
+handoff signer), and `ApprovedDocumentView` (post-approval "Make Public").
+Everything else — the setup wizard, the settings panel and everything it
+opens (Template Access, Manage Documents, and their sub-views),
+`StaffFileSelectView` — has a finite timeout and is expected to just go
+stale on restart like any short-lived admin flow; that's fine, nothing is
+lost since they don't hold state a citizen is waiting on.
+
+`Filecab.initialize()` calls `_register_persistent_views()` on every cog
+load (including after a restart), which walks every guild's
+`published_documents` and re-adds the right view for each message still
+worth re-registering:
+
+- Panel select → re-added whenever `panel_message_id` is set and at least
+  one citizen-facing template is currently loaded (if none are — e.g. the
+  site repo is unreachable at boot — the already-posted panel's dropdown
+  stays unresponsive until templates are available again and the panel is
+  reposted; there's no way to populate a select with zero options).
+- `pending` filings → `FilingReviewView`. If the filing's template was since
+  deleted from the site repo, `spec` comes back `None`; the view still
+  re-registers, but Approve is force-disabled with an explanatory
+  "⚠️ Template Missing" label (there's no schema left to safely collect
+  judge fields or rebuild Assign buttons) while Deny stays fully
+  functional, so staff can still clean up an orphaned filing instead of it
+  being permanently stuck with dead buttons.
+- `approved` filings → `ApprovedDocumentView`.
+- `published` filings → nothing. Once Make Public succeeds the button is
+  edited to a permanently disabled "✅ Published" — that state is baked
+  into the message itself, so there's nothing left to re-register.
+- Any signer whose handoff is still `status: "pending"` → `SignerRequestView`
+  on their DM, regardless of the parent filing's own status (a pending
+  signer only ever exists while the filing itself is still `pending`).
 
 ## Publishing
 

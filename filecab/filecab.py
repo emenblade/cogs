@@ -85,7 +85,7 @@ class Filecab(commands.Cog):
             for filing_id, record in guild_data.get("published_documents", {}).items():
                 spec = self.templates.get(record.get("template_id"))
                 message_id = record.get("message_id")
-                if record.get("status") == "pending" and message_id and spec:
+                if record.get("status") == "pending" and message_id:
                     self.bot.add_view(
                         FilingReviewView(self.config, self.bot, filing_id, spec, record.get("signers", {})),
                         message_id=message_id,
