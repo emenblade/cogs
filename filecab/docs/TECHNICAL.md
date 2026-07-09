@@ -29,7 +29,8 @@ once staff sign off.
   the staff `file` command's select, the persistent review view (dynamic
   Assign buttons + Approve/Deny), the persistent signer-handoff DM view
   (Sign/Decline), the persistent post-approval "Make Public" view, and the
-  settings panel.
+  settings panel (including template access gating and document
+  takedown/delete).
 
 ## Template format
 
@@ -94,6 +95,23 @@ without restarting the bot, then **Repost Panel** (settings) so citizen-facing
 ones appear in the select menu. `filecab templates`/settings' **Reload
 Templates** re-scan what's already on disk locally, with no network call.
 
+### Filing access gates
+
+Per-template role restrictions live entirely on the cog side (guild
+`template_access`, see Config schema below) rather than in the template
+schema itself — the site repo stays a pure content source, and every
+template still appears together in the one document-select dropdown (the
+panel is a single persistent message, so options can't vary per viewer
+anyway). The gate is enforced where selection turns into DM Q&A
+(`views._start_filing_from_select`): if the template has any allowed roles
+configured and the selecting member has none of them (and isn't an admin),
+they get an ephemeral "you don't have permission" reply instead of a DM.
+`filecab file` (`StaffFileSelectView`) always passes `enforce_gate=False` —
+that command is already staff/admin-only, so the gate would be redundant
+there. Settings → **Template Access** manages the mapping: pick a template,
+then either select role(s) via a `RoleSelect` (replaces the set) or hit
+**Open to Everyone** to clear it back to unrestricted.
+
 ## Filing lifecycle
 
 Every filing — citizen-filed or judge-authored — always requires staff
@@ -134,8 +152,19 @@ handoff signer role has signed.
 6. **Make Public** (separate, whenever staff are ready) → calls
    `DocumentPublisher.publish()` (stub) and announces in the document
    channel. Status: `published`.
-7. **Take Down** (settings panel → Manage Documents) → deletes the local
-   files, calls `unpublish()` if it was live. Status: `removed`.
+7. **Take Down** (settings panel → Manage Documents → a filing → 🗑️ Take
+   Down) → deletes the local files, calls `unpublish()` if it was live.
+   Status: `removed`. The record itself is kept (title, answers, audit
+   trail) — only the rendered/live copies are gone.
+8. **Delete Permanently** (settings panel → Manage Documents → a filing →
+   ❌ Delete Permanently → Confirm Delete) → same cleanup as Take Down if the
+   filing was still `approved`/`published`, then erases the guild config
+   record entirely (`FilingManager.purge`). Irreversible; gated behind an
+   extra confirmation step since it drops the stored answers for good.
+   Pending filings aren't eligible (deny it first) so an open review thread
+   never loses the record it's referencing. Manage Documents lists every
+   non-`pending` filing (any status), not just published ones, so denied or
+   already-taken-down filings can be purged too.
 
 ## Publishing
 
@@ -162,6 +191,9 @@ that push — filecab doesn't maintain any index itself.
   re-registration and the takedown command). `signers` is itself a dict of
   `role` → `{user_id, status, dm_message_id}` (`status` ∈ `unassigned |
   pending | signed | declined`), one entry per handoff-required signer role.
+  `template_access` (dict of `template_id` → `[role_id, ...]`; a template
+  missing from this dict, or mapped to an empty list, is open to everyone —
+  see "Filing access gates" above).
 - **User**: `active_filing` (`{"template_id", "guild_id", "field_index",
   "answers"}`), the in-progress DM Q&A state.
 - **Global**: `filing_counters` (`{"<template_id>-<year>": int}`, backing the

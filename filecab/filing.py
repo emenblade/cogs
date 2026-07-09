@@ -464,3 +464,30 @@ class FilingManager:
         published[filing_id] = record
         await guild_conf.published_documents.set(published)
         return True
+
+    async def purge(self, guild: discord.Guild, filing_id: str) -> bool:
+        """Permanently erase a filing: unpublish/delete files if still on file, then drop its record.
+
+        Unlike `takedown`, this removes the stored answers entirely rather
+        than leaving a `status: "removed"` record behind. Pending filings
+        aren't eligible — deny it first (or let it run its course) so an
+        open review thread never loses the record it's referencing.
+        """
+        guild_conf = self.config.guild(guild)
+        published = await guild_conf.published_documents()
+        record = published.get(filing_id)
+        if not record or record["status"] == "pending":
+            return False
+
+        if record["status"] in ("approved", "published"):
+            html_path = self.templates.documents_path / record["template_id"] / f"{filing_id}.html"
+            json_path = self.templates.documents_path / record["template_id"] / f"{filing_id}.json"
+            for path in (html_path, json_path):
+                if path.exists():
+                    path.unlink()
+            if record["status"] == "published":
+                await self.publisher.unpublish(record["template_id"], filing_id)
+
+        del published[filing_id]
+        await guild_conf.published_documents.set(published)
+        return True

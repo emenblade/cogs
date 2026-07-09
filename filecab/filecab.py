@@ -33,6 +33,11 @@ class Filecab(commands.Cog):
             # {filing_id: {template_id, title, category, user_id, answers, filed_date, status,
             #              thread_id?, message_id?, approved_by?, signed_date?, signed_by?,
             #              html_path?, json_path?, published_url?}}
+            template_access={},
+            # {template_id: [role_id, ...]} — templates not listed here (or
+            # mapped to an empty list) are open to everyone. Only checked on
+            # the public document panel; `filecab file` (staff) always
+            # bypasses it. Admins always bypass it too.
         )
         self.config.register_user(
             active_filing=None,
@@ -174,8 +179,9 @@ class Filecab(commands.Cog):
 
         Lets you change the document channel, review forum, approval role, and
         site repository; reload templates already on disk; re-post the document
-        panel; and take down previously published documents. Use `filecab refresh`
-        to fetch fresh templates from the site repo.
+        panel; restrict which roles can file particular templates; and take
+        down or permanently delete previously filed documents. Use `filecab
+        refresh` to fetch fresh templates from the site repo.
         """
         approval_role_id = await self.config.guild(ctx.guild).approval_role()
         if not self._is_staff(ctx, approval_role_id):
