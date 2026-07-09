@@ -7,9 +7,10 @@ once staff sign off.
 
 ## Architecture
 
-- `filecab.py` — the `Filecab` cog: Config schema, the `on_message` DM
-  router, persistent-view re-registration, and the `filecab` command group
-  (`setup`, `settings`, `file`, `templates`, `refresh`).
+- `filecab.py` — the `Filecab` cog: Config schema, the `on_message` router
+  (DMs during filing, plus logging review-thread conversation), persistent-
+  view re-registration, and the `filecab` command group (`setup`, `settings`,
+  `file`, `templates`, `refresh`).
 - `github_client.py` — `GitHubClient`, a thin `aiohttp` wrapper around the
   GitHub REST API (list/get/put/delete file contents). Token comes from
   Red's own shared API tokens (`[p]set api github token,<token>`), not
@@ -20,7 +21,7 @@ once staff sign off.
   `filecab refresh`) — see `docs/SITE_REPO_CONTRACT.md` for the schema that
   repo's `templates/` folder must follow.
 - `filing.py` — `FilingManager` runs the DM Q&A flow, mints filing ids, posts
-  pending filings to the staff review forum, handles approve/deny, and
+  pending filings to a private review thread, handles approve/deny, and
   publishes/takes down on explicit staff action.
 - `publisher.py` — `DocumentPublisher`, pushes/removes filings on the
   configured site repo via `GitHubClient`.
@@ -29,7 +30,37 @@ once staff sign off.
   the staff `file` command's select, the persistent review view (dynamic
   Assign buttons + Approve/Deny), the persistent signer-handoff DM view
   (Sign/Decline), the persistent post-approval "Make Public" view, and the
-  settings panel.
+  settings panel (including template access gating and document
+  takedown/delete).
+
+## UI conventions
+
+All buttons across `views.py` follow one color/emoji scheme, so a new button
+should match rather than invent its own:
+
+- **Green** — confirm / positive / completed (`Confirm` in the setup wizard,
+  `✅ Approve`, `✅ Sign`, a signer's `✅ {label}: signed` state, `✅ Published`
+  once Make Public succeeds).
+- **Red** — destructive / negative outcome (`❌ Deny`, `❌ Decline`,
+  `❌ Delete Permanently`, `❌ Confirm Delete`, a declined signer's
+  `🔁 Reassign {label}` state).
+- **Blurple** — a primary, non-destructive action (`Set Site Repository`,
+  `🔄 Reload Templates`, `🔄 Refresh Templates from Repo`, `Change Site Repo`,
+  `Repost Panel`, `🌐 Make Public`, an unassigned signer's `➕ Assign {label}`
+  state).
+- **Grey** — secondary / navigational / "opens another menu" (`Cancel`,
+  `Skip for Now`, `Template Access`, `Manage Documents`, `Open to Everyone`,
+  `🗑️ Take Down`, a pending signer's `⏳ {label}: awaiting reply` state).
+
+`Cancel` is always grey, never red — red is reserved for an action that
+actually denies/declines/deletes something, and using it for a plain abort
+would dilute that signal. Emoji are reserved for buttons that represent a
+concrete document/filing action with a natural icon (approve, deny, sign,
+decline, publish, delete, take down, (re)assign) or that match an emoji
+their own result message already uses (`🔄` on the two template-refresh
+buttons, matching their own "🔄 Reloaded…"/"🔄 Fetched…" replies); generic
+navigation/admin buttons (`Confirm`, `Cancel`, `Change Site Repo`, `Template
+Access`, `Manage Documents`, …) stay plain text.
 
 ## Template format
 
@@ -94,6 +125,36 @@ without restarting the bot, then **Repost Panel** (settings) so citizen-facing
 ones appear in the select menu. `filecab templates`/settings' **Reload
 Templates** re-scan what's already on disk locally, with no network call.
 
+### Filing access gates
+
+Per-template role restrictions live entirely on the cog side (guild
+`template_access`, see Config schema below) rather than in the template
+schema itself — the site repo stays a pure content source, and every
+template still appears together in the one document-select dropdown (the
+panel is a single persistent message, so options can't vary per viewer
+anyway). The gate is enforced where selection turns into DM Q&A
+(`views._start_filing_from_select`): if the template has any allowed roles
+configured and the selecting member has none of them (and isn't an admin),
+they get an ephemeral "you don't have permission" reply instead of a DM.
+`filecab file` (`StaffFileSelectView`) always passes `enforce_gate=False` —
+that command is already staff/admin-only, so the gate would be redundant
+there. Settings → **Template Access** manages the mapping: pick a template,
+then either select role(s) via a `RoleSelect` (replaces the set) or hit
+**Open to Everyone** to clear it back to unrestricted. Only citizen-facing
+templates are offered — gating a staff-authored one would be dead
+configuration, since `filecab file` always bypasses the gate.
+
+`SettingsPanelView` and `StaffFileSelectView` both override
+`interaction_check` to re-validate staff/admin on every click, matching the
+per-click checks the review-thread views already used. This matters because
+`filecab_settings`/`filecab_file` send their view via `ctx.send(...,
+ephemeral=True)`, and Red's hybrid commands silently drop `ephemeral` when
+invoked with a text prefix instead of a slash command — without the
+re-check, a prefix invocation would leave the settings panel (with its
+permanent-delete and access-reconfiguration actions) visible and clickable
+to any member, and would let anyone reach `filecab file`'s
+`enforce_gate=False` path and bypass template gates entirely.
+
 ## Filing lifecycle
 
 Every filing — citizen-filed or judge-authored — always requires staff
@@ -106,11 +167,17 @@ handoff signer role has signed.
    date → a `filing_id` (`<template_id>-<year>-<seq>`, from the global
    per-template-per-year counter in `filing_counters`) is minted → the
    filing's `signers` map is seeded (one `{user_id: null, status:
-   "unassigned", dm_message_id: null}` entry per handoff role) → a review
-   thread is posted to the review forum with the Q&A transcript and
-   `FilingReviewView` (one "Assign X" button per handoff role, plus
-   Approve/Deny). Status: `pending`. Nothing is rendered yet.
-2. **Assign** (staff click "Assign Witness" etc.) → permission-checked, then
+   "unassigned", dm_message_id: null}` entry per handoff role) → a **private**
+   thread is created in the configured review channel with the Q&A
+   transcript and `FilingReviewView` (one "➕ Assign X" button per handoff
+   role, plus Approve/Deny), and the filer is added to it directly
+   (`Thread.add_user`, `invitable=False` so only staff with Manage Messages
+   can add anyone else) — they can see and post in their own filing's
+   thread, like a support ticket, but have no access to any other filing's
+   thread; that isolation is Discord's own private-thread membership model,
+   not something the bot enforces. Status: `pending`. Nothing is rendered
+   yet.
+2. **Assign** (staff click "➕ Assign Witness" etc.) → permission-checked, then
    an ephemeral `UserSelect` — no @-mention typing, since DMs can't resolve
    mentions — picking a member calls `FilingManager.assign_signer`, which DMs
    them the transcript + a persistent `SignerRequestView` (Sign/Decline),
@@ -133,9 +200,73 @@ handoff signer role has signed.
    awaiting a reply, so nobody can sign a dead filing. Status: `denied`.
 6. **Make Public** (separate, whenever staff are ready) → calls
    `DocumentPublisher.publish()` (stub) and announces in the document
-   channel. Status: `published`.
-7. **Take Down** (settings panel → Manage Documents) → deletes the local
-   files, calls `unpublish()` if it was live. Status: `removed`.
+   channel; on success the button relabels to a disabled, green
+   "✅ Published" (matching the "completed" color used elsewhere) and stays
+   that way permanently — see "Persistence & restart safety" for why it
+   doesn't need re-registration after a restart. Status: `published`.
+7. **Take Down** (settings panel → Manage Documents → a filing → 🗑️ Take
+   Down) → deletes the local files, calls `unpublish()` if it was live.
+   Status: `removed`. The record itself is kept (title, answers, audit
+   trail) — only the rendered/live copies are gone.
+8. **Delete Permanently** (settings panel → Manage Documents → a filing →
+   ❌ Delete Permanently → ❌ Confirm Delete) → same cleanup as Take Down if the
+   filing was still `approved`/`published`, then erases the guild config
+   record entirely (`FilingManager.purge`). Irreversible; gated behind an
+   extra confirmation step since it drops the stored answers for good.
+   Pending filings aren't eligible (deny it first) so an open review thread
+   never loses the record it's referencing. Manage Documents lists every
+   non-`pending` filing (any status), not just published ones, so denied or
+   already-taken-down filings can be purged too.
+
+Throughout all of the above, staff and the filer can talk directly in the
+filing's private thread — there's no dedicated "ask a question" button,
+it's just a normal Discord conversation once the filer's been added.
+`Filecab.on_message` picks up every human message posted there (matched by
+`thread.parent_id` == the configured review channel, then `thread_id` on
+the filing record) via `FilingManager.log_thread_message`, and appends it to
+that filing's `discussion` list in config — a durable copy of the
+conversation that outlives the thread itself if it's later archived or the
+channel is reconfigured.
+
+## Persistence & restart safety
+
+Discord buttons/selects stop working after a process restart unless the bot
+re-registers a matching view (same custom IDs) against the still-live
+message before anyone clicks them again — `discord.py` doesn't remember
+views across restarts on its own. Exactly four views in this cog are
+long-lived enough to need that: `TemplateSelectView` (the document panel),
+`FilingReviewView` (review-thread post), `SignerRequestView` (DM'd to a
+handoff signer), and `ApprovedDocumentView` (post-approval "Make Public").
+Everything else — the setup wizard, the settings panel and everything it
+opens (Template Access, Manage Documents, and their sub-views),
+`StaffFileSelectView` — has a finite timeout and is expected to just go
+stale on restart like any short-lived admin flow; that's fine, nothing is
+lost since they don't hold state a citizen is waiting on.
+
+`Filecab.initialize()` calls `_register_persistent_views()` on every cog
+load (including after a restart), which walks every guild's
+`published_documents` and re-adds the right view for each message still
+worth re-registering:
+
+- Panel select → re-added whenever `panel_message_id` is set and at least
+  one citizen-facing template is currently loaded (if none are — e.g. the
+  site repo is unreachable at boot — the already-posted panel's dropdown
+  stays unresponsive until templates are available again and the panel is
+  reposted; there's no way to populate a select with zero options).
+- `pending` filings → `FilingReviewView`. If the filing's template was since
+  deleted from the site repo, `spec` comes back `None`; the view still
+  re-registers, but Approve is force-disabled with an explanatory
+  "⚠️ Template Missing" label (there's no schema left to safely collect
+  judge fields or rebuild Assign buttons) while Deny stays fully
+  functional, so staff can still clean up an orphaned filing instead of it
+  being permanently stuck with dead buttons.
+- `approved` filings → `ApprovedDocumentView`.
+- `published` filings → nothing. Once Make Public succeeds the button is
+  edited to a permanently disabled "✅ Published" — that state is baked
+  into the message itself, so there's nothing left to re-register.
+- Any signer whose handoff is still `status: "pending"` → `SignerRequestView`
+  on their DM, regardless of the parent filing's own status (a pending
+  signer only ever exists while the filing itself is still `pending`).
 
 ## Publishing
 
@@ -154,14 +285,20 @@ that push — filecab doesn't maintain any index itself.
 
 ## Config schema
 
-- **Guild**: `document_channel`, `document_review_forum`, `approval_role`,
-  `panel_message_id`, `published_documents` (dict of `filing_id` →
-  `{template_id, title, category, user_id, answers, filed_date, status,
-  thread_id?, message_id?, signers, approved_by?, signed_date?, signed_by?,
-  html_path?, json_path?, published_url?}`, used for persistent-view
-  re-registration and the takedown command). `signers` is itself a dict of
-  `role` → `{user_id, status, dm_message_id}` (`status` ∈ `unassigned |
-  pending | signed | declined`), one entry per handoff-required signer role.
+- **Guild**: `document_channel`, `document_review_channel` (a text channel —
+  each filing gets its own private thread inside it, see "Filing lifecycle"),
+  `approval_role`, `panel_message_id`, `published_documents` (dict of
+  `filing_id` → `{template_id, title, category, user_id, answers, filed_date,
+  status, thread_id?, message_id?, signers, discussion, approved_by?,
+  signed_date?, signed_by?, html_path?, json_path?, published_url?}`, used
+  for persistent-view re-registration and the takedown command). `signers`
+  is itself a dict of `role` → `{user_id, status, dm_message_id}` (`status`
+  ∈ `unassigned | pending | signed | declined`), one entry per
+  handoff-required signer role. `discussion` is a list of `{author_id,
+  author_label, content, at}`, one entry per human message posted in the
+  filing's private review thread. `template_access` (dict of `template_id`
+  → `[role_id, ...]`; a template missing from this dict, or mapped to an
+  empty list, is open to everyone — see "Filing access gates" above).
 - **User**: `active_filing` (`{"template_id", "guild_id", "field_index",
   "answers"}`), the in-progress DM Q&A state.
 - **Global**: `filing_counters` (`{"<template_id>-<year>": int}`, backing the

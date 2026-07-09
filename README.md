@@ -35,6 +35,46 @@ Discord-native support tickets and application forms, driven entirely by buttons
 
 ---
 
+## Filecab
+
+Discord-native DOJ document filing. Members pick a document type from a dropdown, answer questions one at a time over DM, and the finished document goes to a private staff review thread for Approve/Deny (with optional multi-signer handoff) before an explicit "Make Public" step publishes it to a GitHub Pages site.
+
+**Features:**
+- 4-step setup wizard (document channel, review channel, approval role, site repository)
+- Templates are fetched from a configured GitHub repo, not bundled with the cog — add a template pair to the repo and `filecab refresh`, no code changes needed
+- Each filing gets its own private review thread, and the filer is added to it directly — staff can ask follow-up questions like a support ticket, with no visibility into any other filing's thread. The conversation is saved even if the thread is later archived or deleted
+- Multi-signer handoff: staff assign real Discord members to a filing's other roles, who get DM'd a Sign/Decline request
+- Per-template filing access gates — restrict which roles can file a given document type; staff always bypass via `filecab file`
+- Settings panel: change core config, reload/refresh templates, repost the panel, manage per-template access gates, and take down or permanently delete previously filed documents
+- Persistent views survive bot restarts, including a graceful fallback if a filing's template is deleted out from under it
+- Slash command support (`/filecab setup`, `/filecab settings`, `/filecab file`)
+
+### Install
+
+```
+[p]repo add cogs https://github.com/emenblade/cogs
+[p]cog install cogs filecab
+[p]load filecab
+[p]filecab setup
+```
+
+### Commands
+
+| Command | Who | Description |
+|---|---|---|
+| `/filecab setup` | Admins | Run the first-time 4-step setup wizard |
+| `/filecab settings` | Staff / Admins | Open the settings panel — config, templates, access gates, document takedown/delete |
+| `/filecab file` | Staff / Admins | File any document type yourself, including judge-authored ones with no citizen role |
+| `/filecab templates` | Everyone | List currently loaded templates (local only, no network call) |
+| `/filecab refresh` | Staff / Admins | Fetch the latest templates from the configured site repo |
+
+### Documentation
+
+- **[Technical Reference](filecab/docs/TECHNICAL.md)** — architecture, UI conventions, filing lifecycle, persistence/restart safety, config schema
+- **[Site Repo Contract](filecab/docs/SITE_REPO_CONTRACT.md)** — the template/publish schema a site repo's `templates/` and `filings/` folders must follow
+
+---
+
 ## gsm-autosync
 
 Watches Docker for game server containers starting/stopping and automatically syncs them to DiscordGSM's database. Status cards appear in Discord without manual setup.

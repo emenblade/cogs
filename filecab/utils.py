@@ -64,3 +64,16 @@ async def can_review(interaction: discord.Interaction, approval_role_id: int | N
     if interaction.user.guild_permissions.administrator:
         return True
     return check_staff_role(interaction, approval_role_id)
+
+
+async def can_file_template(interaction: discord.Interaction, allowed_role_ids: list[int]) -> bool:
+    """Return True if the interacting user may file a gate-restricted template.
+
+    An empty `allowed_role_ids` means the template isn't gated at all —
+    callers should skip calling this and just allow it. Admins always bypass
+    the gate; staff without Administrator still need to use `filecab file`
+    (which bypasses gates entirely) rather than the public panel.
+    """
+    if interaction.user.guild_permissions.administrator:
+        return True
+    return any(check_staff_role(interaction, role_id) for role_id in allowed_role_ids)

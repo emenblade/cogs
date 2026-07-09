@@ -4,7 +4,7 @@ from typing import Awaitable, Callable
 import discord
 from redbot.core import Config
 from .template_manager import TemplateManager
-from .utils import can_review, normalize_base_url
+from .utils import can_file_template, can_review, normalize_base_url
 
 
 def build_template_options(cog, include_staff_authored: bool = False) -> list[discord.SelectOption]:
@@ -89,24 +89,29 @@ class WizardStep1View(_WizardStepView):
         view.message = interaction.message
         embed = discord.Embed(
             title="Filecab Setup — Step 2 of 4",
-            description="Select the **staff review forum** where pending filings are posted for Approve/Deny.",
+            description=(
+                "Select the **review channel** — a text channel where each filing gets its "
+                "own private thread with Approve/Deny buttons, and the filer is added to "
+                "their own thread (but no others). The bot needs **Create Private Threads** "
+                "there; staff need **Manage Threads** to see every filing's thread."
+            ),
             color=discord.Color.blurple(),
         )
         await interaction.response.edit_message(embed=embed, view=view)
 
-    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.red)
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.grey)
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.stop()
         await interaction.response.edit_message(content="❌ Setup cancelled.", view=None, embed=None)
 
 
 class WizardStep2View(_WizardStepView):
-    """Step 2: select the staff review forum."""
+    """Step 2: select the review channel (a text channel — filings get private threads in it)."""
 
     @discord.ui.select(
         cls=discord.ui.ChannelSelect,
-        placeholder="Select the review forum…",
-        channel_types=[discord.ChannelType.forum],
+        placeholder="Select the review channel…",
+        channel_types=[discord.ChannelType.text],
     )
     async def channel_select(self, interaction: discord.Interaction, select: discord.ui.ChannelSelect):
         self._selected = select.values[0]
@@ -115,9 +120,9 @@ class WizardStep2View(_WizardStepView):
     @discord.ui.button(label="Confirm", style=discord.ButtonStyle.green)
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
         if self._selected is None:
-            await interaction.response.send_message("⚠️ Please select a forum first.", ephemeral=True)
+            await interaction.response.send_message("⚠️ Please select a channel first.", ephemeral=True)
             return
-        await self.config.guild_from_id(self.guild_id).document_review_forum.set(self._selected.id)
+        await self.config.guild_from_id(self.guild_id).document_review_channel.set(self._selected.id)
         self.stop()
         view = WizardStep3View(self.config, self.guild_id, self.bot)
         view.message = interaction.message
@@ -131,7 +136,7 @@ class WizardStep2View(_WizardStepView):
         )
         await interaction.response.edit_message(embed=embed, view=view)
 
-    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.red)
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.grey)
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.stop()
         await interaction.response.edit_message(content="❌ Setup cancelled.", view=None, embed=None)
@@ -148,7 +153,7 @@ class WizardStep3View(_WizardStepView):
         self._selected = select.values[0]
         await interaction.response.defer()
 
-    @discord.ui.button(label="Continue", style=discord.ButtonStyle.green)
+    @discord.ui.button(label="Confirm", style=discord.ButtonStyle.green)
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
         guild_conf = self.config.guild_from_id(self.guild_id)
         await guild_conf.approval_role.set(self._selected.id if self._selected else None)
@@ -168,7 +173,7 @@ class WizardStep3View(_WizardStepView):
         )
         await interaction.response.edit_message(embed=embed, view=view)
 
-    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.red)
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.grey)
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.stop()
         await interaction.response.edit_message(content="❌ Setup cancelled.", view=None, embed=None)
@@ -247,7 +252,7 @@ class WizardStep4View(_WizardStepView):
 
         await interaction.response.send_modal(SiteRepoModal(self.config, on_done=_on_done))
 
-    @discord.ui.button(label="Skip for now", style=discord.ButtonStyle.grey)
+    @discord.ui.button(label="Skip for Now", style=discord.ButtonStyle.grey)
     async def skip(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
         await self._finish(interaction, interaction.message, None, 0, "")
@@ -284,7 +289,7 @@ class WizardStep4View(_WizardStepView):
             )
         await interaction.followup.send("\n".join(parts), ephemeral=True)
 
-    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.red)
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.grey)
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.stop()
         await interaction.response.edit_message(content="❌ Setup cancelled.", view=None, embed=None)
@@ -341,22 +346,53 @@ class TemplateSelectView(discord.ui.View):
 
 class StaffFileSelectView(_ExpiringView):
     """Ephemeral view for `filecab file`: staff can file any template, including
-    judge-authored ones with no citizen applicant role."""
+    judge-authored ones with no citizen applicant role. Access gates don't apply
+    here — `filecab file` is already staff/admin-only.
+
+    `filecab_file` sends this via `ctx.send(..., ephemeral=True)`, but Red's
+    hybrid commands silently drop `ephemeral` when invoked with a text prefix
+    rather than a slash command — the message would otherwise be visible (and
+    clickable) to any member in the channel. `interaction_check` re-validates
+    staff/admin on every click so a prefix invocation can't turn this into an
+    unrestricted "file anything, gates included" tool.
+    """
 
     def __init__(self, options: list[discord.SelectOption]):
         super().__init__(timeout=120)
         self.add_item(self._TemplateSelect(options))
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        cog = interaction.client.cogs["Filecab"]
+        approval_role_id = await cog.config.guild(interaction.guild).approval_role()
+        if await can_review(interaction, approval_role_id):
+            return True
+        await interaction.response.send_message(
+            "⚠️ You don't have permission to use this.", ephemeral=True
+        )
+        return False
 
     class _TemplateSelect(discord.ui.Select):
         def __init__(self, options: list[discord.SelectOption]):
             super().__init__(placeholder="Select a document type to file…", options=options)
 
         async def callback(self, interaction: discord.Interaction):
-            await _start_filing_from_select(interaction, self.values[0])
+            await _start_filing_from_select(interaction, self.values[0], enforce_gate=False)
 
 
-async def _start_filing_from_select(interaction: discord.Interaction, template_id: str) -> None:
+async def _start_filing_from_select(
+    interaction: discord.Interaction, template_id: str, *, enforce_gate: bool = True
+) -> None:
     cog = interaction.client.cogs["Filecab"]
+    if enforce_gate:
+        access = await cog.config.guild(interaction.guild).template_access()
+        allowed_role_ids = access.get(template_id, [])
+        if allowed_role_ids and not await can_file_template(interaction, allowed_role_ids):
+            spec = cog.templates.get(template_id)
+            title = spec["title"] if spec else "this document"
+            await interaction.response.send_message(
+                f"⚠️ You don't have permission to file **{title}**.", ephemeral=True
+            )
+            return
     try:
         dm = await interaction.user.create_dm()
     except discord.Forbidden:
@@ -372,7 +408,7 @@ async def _start_filing_from_select(interaction: discord.Interaction, template_i
 
 
 # ---------------------------------------------------------------------------
-# Review forum (persistent): pending (+ signer handoff) -> approved -> published
+# Review channel (persistent): pending (+ signer handoff) -> approved -> published
 # ---------------------------------------------------------------------------
 
 class SignatureFieldsModal(discord.ui.Modal):
@@ -437,11 +473,11 @@ def _assign_button_appearance(label: str, state: dict) -> tuple[discord.ButtonSt
         return discord.ButtonStyle.grey, f"⏳ {label}: awaiting reply", True
     if status == "declined":
         return discord.ButtonStyle.red, f"🔁 Reassign {label}", False
-    return discord.ButtonStyle.blurple, f"Assign {label}", False
+    return discord.ButtonStyle.blurple, f"➕ Assign {label}", False
 
 
 class _AssignButton(discord.ui.Button):
-    """One button per handoff signer role on the review-forum post."""
+    """One button per handoff signer role on the review-thread post."""
 
     def __init__(self, filing_id: str, role: str, label: str, state: dict):
         style, text, disabled = _assign_button_appearance(label, state)
@@ -501,12 +537,17 @@ class _AssignUserSelectView(_ExpiringView):
 
 
 class FilingReviewView(discord.ui.View):
-    """Review-forum view: one Assign button per handoff signer role, plus Approve/Deny.
+    """Review-thread view: one Assign button per handoff signer role, plus Approve/Deny.
 
-    Approve is disabled until every handoff role has signed.
+    Approve is disabled until every handoff role has signed. `spec` can be
+    None — the filing's template was deleted from the site repo since it was
+    filed — in which case Approve is force-disabled (there's no schema left
+    to safely collect judge fields or render the document) and no Assign
+    buttons are shown, but Deny still works, so a restart doesn't strand the
+    filing with an entirely dead review post.
     """
 
-    def __init__(self, config: Config, bot, filing_id: str, spec: dict, signers_state: dict):
+    def __init__(self, config: Config, bot, filing_id: str, spec: dict | None, signers_state: dict):
         super().__init__(timeout=None)
         self.config = config
         self.bot = bot
@@ -515,10 +556,15 @@ class FilingReviewView(discord.ui.View):
 
         self.children[0].custom_id = f"filecab:approve:{filing_id}"
         self.children[1].custom_id = f"filecab:deny:{filing_id}"
+
+        if spec is None:
+            self.children[0].disabled = True
+            self.children[0].label = "⚠️ Template Missing"
+            return
+
         self.children[0].disabled = not all(
             s.get("status") == "signed" for s in signers_state.values()
         )
-
         for signer in TemplateManager.handoff_signers(spec):
             role = signer["role"]
             state = signers_state.get(role, {"status": "unassigned"})
@@ -655,6 +701,7 @@ class ApprovedDocumentView(discord.ui.View):
         url = await cog.filing.make_public(interaction.guild, self.filing_id)
         button.disabled = True
         button.label = "✅ Published"
+        button.style = discord.ButtonStyle.green
         await interaction.message.edit(view=self)
         if url:
             await interaction.followup.send(
@@ -674,10 +721,26 @@ class ApprovedDocumentView(discord.ui.View):
 # ---------------------------------------------------------------------------
 
 class SettingsPanelView(_ExpiringView):
+    """`filecab_settings` sends this via `ctx.send(..., ephemeral=True)`, but Red's
+    hybrid commands silently drop `ephemeral` when invoked with a text prefix rather
+    than a slash command — the panel would otherwise be visible (and clickable) to
+    any member in the channel. `interaction_check` re-validates staff/admin on every
+    click, matching the per-click checks already used on the review-thread views.
+    """
+
     def __init__(self, config: Config, bot):
         super().__init__(timeout=600)
         self.config = config
         self.bot = bot
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        approval_role_id = await self.config.guild(interaction.guild).approval_role()
+        if await can_review(interaction, approval_role_id):
+            return True
+        await interaction.response.send_message(
+            "⚠️ You don't have permission to use this.", ephemeral=True
+        )
+        return False
 
     @discord.ui.select(
         cls=discord.ui.ChannelSelect,
@@ -693,14 +756,14 @@ class SettingsPanelView(_ExpiringView):
 
     @discord.ui.select(
         cls=discord.ui.ChannelSelect,
-        placeholder="Change review forum…",
-        channel_types=[discord.ChannelType.forum],
+        placeholder="Change review channel…",
+        channel_types=[discord.ChannelType.text],
         row=1,
     )
-    async def change_forum(self, interaction: discord.Interaction, select: discord.ui.ChannelSelect):
-        await self.config.guild(interaction.guild).document_review_forum.set(select.values[0].id)
+    async def change_review_channel(self, interaction: discord.Interaction, select: discord.ui.ChannelSelect):
+        await self.config.guild(interaction.guild).document_review_channel.set(select.values[0].id)
         await interaction.response.send_message(
-            f"✅ Review forum set to {select.values[0].mention}.", ephemeral=True
+            f"✅ Review channel set to {select.values[0].mention}.", ephemeral=True
         )
 
     @discord.ui.select(
@@ -714,7 +777,7 @@ class SettingsPanelView(_ExpiringView):
             f"✅ Approval role set to {select.values[0].mention}.", ephemeral=True
         )
 
-    @discord.ui.button(label="Reload Templates", style=discord.ButtonStyle.blurple, row=3)
+    @discord.ui.button(label="🔄 Reload Templates", style=discord.ButtonStyle.blurple, row=3)
     async def reload_templates(self, interaction: discord.Interaction, button: discord.ui.Button):
         cog = interaction.client.cogs["Filecab"]
         templates = cog.templates.reload()
@@ -726,7 +789,7 @@ class SettingsPanelView(_ExpiringView):
             f"🔄 Reloaded. **{len(templates)}** template(s) loaded:\n{listing}", ephemeral=True
         )
 
-    @discord.ui.button(label="Refresh Templates from Repo", style=discord.ButtonStyle.blurple, row=3)
+    @discord.ui.button(label="🔄 Refresh Templates from Repo", style=discord.ButtonStyle.blurple, row=3)
     async def refresh_templates(self, interaction: discord.Interaction, button: discord.ui.Button):
         cog = interaction.client.cogs["Filecab"]
         site_repo = await self.config.site_repo()
@@ -760,47 +823,223 @@ class SettingsPanelView(_ExpiringView):
                 ephemeral=True,
             )
 
+    @discord.ui.button(label="Template Access", style=discord.ButtonStyle.grey, row=4)
+    async def template_access(self, interaction: discord.Interaction, button: discord.ui.Button):
+        cog = interaction.client.cogs["Filecab"]
+        # Gates are only enforced on the public panel, which never lists staff-authored
+        # (judge-only) templates in the first place — configuring one here would be
+        # dead configuration, so don't offer it.
+        templates = {
+            tid: spec for tid, spec in cog.templates.all_templates().items()
+            if not cog.templates.is_staff_authored(spec)
+        }
+        if not templates:
+            await interaction.response.send_message(
+                "No citizen-facing templates are loaded yet.", ephemeral=True
+            )
+            return
+        access = await self.config.guild(interaction.guild).template_access()
+        view = TemplateAccessSelectView(self.config, templates, access)
+        await interaction.response.send_message(
+            "Select a document type to control who can file it:", view=view, ephemeral=True
+        )
+        view.message = await interaction.original_response()
+
     @discord.ui.button(label="Manage Documents", style=discord.ButtonStyle.grey, row=4)
     async def manage_documents(self, interaction: discord.Interaction, button: discord.ui.Button):
         guild_conf = self.config.guild(interaction.guild)
         published = await guild_conf.published_documents()
-        live = {k: v for k, v in published.items() if v.get("status") == "published"}
-        if not live:
-            await interaction.response.send_message("No published documents to manage.", ephemeral=True)
+        manageable = {k: v for k, v in published.items() if v.get("status") != "pending"}
+        if not manageable:
+            await interaction.response.send_message("No documents to manage.", ephemeral=True)
             return
-        view = ManageDocumentsView(self.config, self.bot, live)
+        view = ManageDocumentsView(self.config, self.bot, manageable)
         await interaction.response.send_message(
-            "Select a document to take down:", view=view, ephemeral=True
+            "Select a document to take down or permanently delete:", view=view, ephemeral=True
         )
         view.message = await interaction.original_response()
 
 
+class TemplateAccessSelectView(_ExpiringView):
+    """Ephemeral view: pick a template to view/edit its filing-access gate."""
+
+    def __init__(self, config: Config, templates: dict[str, dict], access: dict[str, list]):
+        super().__init__(timeout=180)
+        self.config = config
+        self.templates = templates
+        self.access = access
+        options = []
+        for template_id, spec in list(templates.items())[:25]:
+            gated_count = len(access.get(template_id, []))
+            description = f"Gated to {gated_count} role(s)" if gated_count else "Open to everyone"
+            options.append(
+                discord.SelectOption(label=spec["title"][:100], value=template_id, description=description)
+            )
+        self.add_item(self._TemplateSelect(options))
+
+    class _TemplateSelect(discord.ui.Select):
+        def __init__(self, options: list[discord.SelectOption]):
+            super().__init__(placeholder="Select a document type…", options=options)
+
+        async def callback(self, interaction: discord.Interaction):
+            template_id = self.values[0]
+            spec = self.view.templates.get(template_id)
+            title = spec["title"] if spec else template_id
+
+            # Gated/not-gated must be judged from the raw id list — same as enforcement
+            # in `_start_filing_from_select` — not from ids that still resolve to a live
+            # role, or a deleted role would make this claim "open to everyone" while the
+            # gate actually blocks everybody.
+            role_ids = self.view.access.get(template_id, [])
+            if not role_ids:
+                summary = "Currently open to **everyone**."
+            else:
+                parts = [
+                    r.mention if (r := interaction.guild.get_role(rid)) else f"a deleted role (`{rid}`)"
+                    for rid in role_ids
+                ]
+                summary = "Currently gated to: " + ", ".join(parts)
+
+            gate_view = TemplateGateRoleView(self.view.config, template_id, title)
+            await interaction.response.edit_message(
+                content=(
+                    f"**{title}**\n{summary}\n\n"
+                    "Select the role(s) allowed to file this, or clear it below to open it "
+                    "back up to everyone."
+                ),
+                view=gate_view,
+            )
+            gate_view.message = await interaction.original_response()
+
+
+class TemplateGateRoleView(_ExpiringView):
+    """Ephemeral view: set or clear one template's filing-access gate roles."""
+
+    def __init__(self, config: Config, template_id: str, title: str):
+        super().__init__(timeout=120)
+        self.config = config
+        self.template_id = template_id
+        self.title = title
+
+    @discord.ui.select(cls=discord.ui.RoleSelect, placeholder="Select allowed role(s)…", min_values=1, max_values=25)
+    async def role_select(self, interaction: discord.Interaction, select: discord.ui.RoleSelect):
+        async with self.config.guild(interaction.guild).template_access() as access:
+            access[self.template_id] = [r.id for r in select.values]
+        mentions = ", ".join(r.mention for r in select.values)
+        await interaction.response.edit_message(
+            content=f"✅ **{self.title}** is now restricted to: {mentions}", view=None
+        )
+
+    @discord.ui.button(label="Open to Everyone", style=discord.ButtonStyle.grey, row=1)
+    async def clear(self, interaction: discord.Interaction, button: discord.ui.Button):
+        async with self.config.guild(interaction.guild).template_access() as access:
+            access.pop(self.template_id, None)
+        await interaction.response.edit_message(
+            content=f"✅ **{self.title}** is now open to everyone.", view=None
+        )
+
+
 class ManageDocumentsView(_ExpiringView):
-    """Ephemeral view for taking down a previously published document."""
+    """Ephemeral view for picking a previously filed document to take down or delete."""
 
     def __init__(self, config: Config, bot, documents: dict[str, dict]):
         super().__init__(timeout=120)
         self.config = config
         self.bot = bot
+        shown = list(documents.items())[:25]
         options = [
-            discord.SelectOption(label=f"{rec['title']} ({filing_id})", value=filing_id)
-            for filing_id, rec in list(documents.items())[:25]
+            discord.SelectOption(
+                label=f"{rec['title']} ({filing_id})"[:100],
+                description=f"Status: {rec.get('status', 'unknown')}",
+                value=filing_id,
+            )
+            for filing_id, rec in shown
         ]
-        self.add_item(self._DocumentSelect(options))
+        # Only carry title/status forward, not the full record — filings hold citizen
+        # PII (DM answers) that the takedown/delete flow below has no need to see.
+        titles = {filing_id: (rec["title"], rec.get("status")) for filing_id, rec in shown}
+        self.add_item(self._DocumentSelect(titles, options))
 
     class _DocumentSelect(discord.ui.Select):
-        def __init__(self, options: list[discord.SelectOption]):
+        def __init__(self, titles: dict[str, tuple[str, str]], options: list[discord.SelectOption]):
             super().__init__(placeholder="Select a document…", options=options)
+            self.titles = titles
 
         async def callback(self, interaction: discord.Interaction):
             filing_id = self.values[0]
-            cog = interaction.client.cogs["Filecab"]
-            removed = await cog.filing.takedown(interaction.guild, filing_id)
-            if removed:
-                await interaction.response.edit_message(
-                    content=f"🗑️ Took down `{filing_id}`.", view=None
-                )
-            else:
-                await interaction.response.edit_message(
-                    content=f"⚠️ Could not find `{filing_id}`.", view=None
-                )
+            title, status = self.titles[filing_id]
+            view = DocumentActionView(filing_id, title, status)
+            await interaction.response.edit_message(
+                content=f"**{title}** (`{filing_id}`) — status: {status}",
+                view=view,
+            )
+            view.message = await interaction.original_response()
+
+
+class DocumentActionView(_ExpiringView):
+    """Ephemeral view: choose what to do with one filed document."""
+
+    def __init__(self, filing_id: str, title: str, status: str | None):
+        super().__init__(timeout=120)
+        self.filing_id = filing_id
+        self.title = title
+        # children[0] is the "Take Down" button (declared first below) — nothing to
+        # unpublish/remove if the record never made it to approved/published.
+        self.children[0].disabled = status not in ("approved", "published")
+
+    @discord.ui.button(label="🗑️ Take Down", style=discord.ButtonStyle.grey)
+    async def take_down(self, interaction: discord.Interaction, button: discord.ui.Button):
+        cog = interaction.client.cogs["Filecab"]
+        ok = await cog.filing.takedown(interaction.guild, self.filing_id)
+        if ok:
+            await interaction.response.edit_message(
+                content=(
+                    f"🗑️ Took down **{self.title}** (`{self.filing_id}`) — unpublished "
+                    "and removed the rendered file. The record is kept on file for the audit "
+                    "trail; use **Delete Permanently** to erase it entirely."
+                ),
+                view=None,
+            )
+        else:
+            await interaction.response.edit_message(content="⚠️ Couldn't take it down.", view=None)
+
+    @discord.ui.button(label="❌ Delete Permanently", style=discord.ButtonStyle.red)
+    async def delete_permanently(self, interaction: discord.Interaction, button: discord.ui.Button):
+        view = _ConfirmDeleteView(self.filing_id, self.title)
+        await interaction.response.edit_message(
+            content=(
+                f"⚠️ Permanently delete **{self.title}** (`{self.filing_id}`)? This "
+                "erases the stored answers and cannot be undone."
+            ),
+            view=view,
+        )
+        view.message = await interaction.original_response()
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.grey)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.edit_message(content="Cancelled.", view=None)
+
+
+class _ConfirmDeleteView(_ExpiringView):
+    """Ephemeral confirmation step before a permanent, unrecoverable delete."""
+
+    def __init__(self, filing_id: str, title: str):
+        super().__init__(timeout=60)
+        self.filing_id = filing_id
+        self.title = title
+
+    @discord.ui.button(label="❌ Confirm Delete", style=discord.ButtonStyle.red)
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        cog = interaction.client.cogs["Filecab"]
+        ok = await cog.filing.purge(interaction.guild, self.filing_id)
+        if ok:
+            await interaction.response.edit_message(
+                content=f"❌ Permanently deleted **{self.title}** (`{self.filing_id}`).",
+                view=None,
+            )
+        else:
+            await interaction.response.edit_message(content="⚠️ Couldn't delete it.", view=None)
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.grey)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.edit_message(content="Cancelled.", view=None)
