@@ -27,15 +27,18 @@ class Filecab(commands.Cog):
         self.config.register_guild(
             document_channel=None,
             document_review_category=None,
+            document_log_forum=None,
             approval_role=None,
             panel_message_id=None,
             published_documents={},
             # {filing_id: {template_id, title, category, user_id, answers, filed_date, status,
             #              channel_id?, message_id?, discussion, approved_by?, signed_date?,
-            #              signed_by?, html_path?, json_path?, published_url?}}
+            #              signed_by?, html_path?, json_path?, published_url?, archived_thread_id?}}
             # discussion is a list of {author_id, author_label, content, at} — every human
             # message posted in the filing's private review channel (filer included), kept
-            # even if the channel itself is later deleted.
+            # even if the channel itself is later deleted. archived_thread_id is set once
+            # Make Public archives the channel's full history to document_log_forum and
+            # deletes it — entirely optional, see "Archiving & channel cleanup" below.
             template_access={},
             # {template_id: [role_id, ...]} — templates not listed here (or
             # mapped to an empty list) are open to everyone. Only checked on
@@ -196,11 +199,18 @@ class Filecab(commands.Cog):
     async def filecab_settings(self, ctx: commands.Context) -> None:
         """Open the settings panel (staff and admins).
 
-        Lets you change the document channel, review category, approval role, and
-        site repository; reload templates already on disk; re-post the document
-        panel; restrict which roles can file particular templates; and take
-        down or permanently delete previously filed documents. Use `filecab
-        refresh` to fetch fresh templates from the site repo.
+        Lets you change the document channel, review category, log forum,
+        approval role, and site repository; reload templates already on disk;
+        re-post the document panel; restrict which roles can file particular
+        templates; and take down or permanently delete previously filed
+        documents. Use `filecab refresh` to fetch fresh templates from the
+        site repo.
+
+        Setting a log forum is optional — if configured, Make Public archives
+        a filing's whole review channel there (locked, tagged by category)
+        and deletes the channel a couple minutes later; if it's never set,
+        review channels are simply left as-is after publishing, same as
+        before this existed.
         """
         approval_role_id = await self.config.guild(ctx.guild).approval_role()
         if not self._is_staff(ctx, approval_role_id):

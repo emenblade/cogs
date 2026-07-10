@@ -1035,6 +1035,42 @@ class SettingsPanelView(_ExpiringView):
         )
         view.message = await interaction.original_response()
 
+    @discord.ui.button(label="📋 Log Forum", style=discord.ButtonStyle.grey, row=4)
+    async def log_forum(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Optional — a forum channel gets its own dedicated select here rather than a
+        row on this already-full (5/5) panel. Leaving it unset just means Make Public
+        never archives/deletes review channels, same as before this existed."""
+        view = LogForumSelectView(self.config)
+        await interaction.response.send_message(
+            "Select the forum where published filings get archived (optional):",
+            view=view,
+            ephemeral=True,
+        )
+        view.message = await interaction.original_response()
+
+
+class LogForumSelectView(_ExpiringView):
+    """Ephemeral view: a single forum ChannelSelect for document_log_forum."""
+
+    def __init__(self, config: Config):
+        super().__init__(timeout=120)
+        self.config = config
+        self.add_item(self._Select())
+
+    class _Select(discord.ui.ChannelSelect):
+        def __init__(self):
+            super().__init__(
+                placeholder="Select a forum channel…",
+                channel_types=[discord.ChannelType.forum],
+            )
+
+        async def callback(self, interaction: discord.Interaction):
+            view: LogForumSelectView = self.view
+            await view.config.guild(interaction.guild).document_log_forum.set(self.values[0].id)
+            await interaction.response.edit_message(
+                content=f"✅ Log forum set to {self.values[0].mention}.", view=None
+            )
+
 
 class TemplateAccessSelectView(_ExpiringView):
     """Ephemeral view: pick a template to view/edit its filing-access gate."""

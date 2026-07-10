@@ -8,7 +8,7 @@ from redbot.core import Config
 from redbot.core.bot import Red
 from .template_manager import TemplateManager
 from .publisher import DocumentPublisher
-from .utils import slugify
+from .utils import build_channel_transcript, get_or_create_forum_tag, slugify
 
 # How long to wait before announcing a filing is live, so the site's GitHub
 # Action has time to rebuild/deploy before anyone clicks the link.
@@ -657,25 +657,118 @@ class FilingManager:
         channel = await self._get_channel(record.get("channel_id"))
         if channel is not None:
             if url:
-                # Give the site's GitHub Action time to rebuild before telling anyone
-                # it's live — don't block the caller (staff already got their own
-                # confirmation) waiting on this.
-                self.bot.loop.create_task(self._announce_live(channel, record["title"], url))
+                await channel.send(
+                    f"🌐 **{record['title']}** is on file and will be public shortly. This "
+                    "channel will be archived to the review log and closed in a couple minutes."
+                )
             else:
                 await channel.send(
                     f"📄 **{record['title']}** approved and on file (site publishing isn't wired up "
-                    "yet, so it isn't live).",
+                    "yet, so it isn't live). This channel will be archived to the review log and "
+                    "closed in a couple minutes.",
                     file=discord.File(str(html_path)),
                 )
+            # Give the site's GitHub Action time to rebuild before announcing the live
+            # link and archiving — don't block the caller (staff already got their own
+            # confirmation) waiting on this.
+            self.bot.loop.create_task(self._archive_and_close(guild, filing_id, url))
         return url
 
-    @staticmethod
-    async def _announce_live(channel, title: str, url: str) -> None:
+    async def _archive_and_close(self, guild: discord.Guild, filing_id: str, url: str | None) -> None:
+        """After the publish-delay window, announce the live link, archive the filing's
+        full channel history to the configured log forum (locked, tagged by category),
+        then delete the now-redundant private channel.
+
+        Archiving is entirely optional (`document_log_forum` unset by default) and only
+        deletes the channel if the archive actually succeeds — if it's not configured,
+        or the archive step raises partway through, the channel is left exactly as it
+        would have been before this feature existed rather than risking losing it.
+        """
         await asyncio.sleep(PUBLISH_ANNOUNCE_DELAY_SECONDS)
+
+        guild_conf = self.config.guild(guild)
+        published = await guild_conf.published_documents()
+        record = published.get(filing_id)
+        if not record:
+            return  # purged/deleted in the meantime
+        channel = await self._get_channel(record.get("channel_id"))
+        if channel is None:
+            return
+
+        if url:
+            try:
+                await channel.send(f"📄 **{record['title']}** is now public — {url}")
+            except discord.HTTPException:
+                pass
+
+        log_forum_id = await guild_conf.document_log_forum()
+        log_forum = guild.get_channel(log_forum_id) if log_forum_id else None
+        if not log_forum or not isinstance(log_forum, discord.ForumChannel):
+            return
+
         try:
-            await channel.send(f"📄 **{title}** is now public — {url}")
+            await self._archive_to_log(log_forum, record, channel, url)
+        except discord.HTTPException:
+            return  # best-effort archival; don't delete a channel we failed to archive
+
+        try:
+            await channel.delete(reason=f"Filecab: filing {filing_id} published and archived")
         except discord.HTTPException:
             pass
+
+    async def _archive_to_log(
+        self, log_forum: discord.ForumChannel, record: dict, channel: discord.TextChannel, url: str | None
+    ) -> None:
+        """Post a filing's full channel history to the log forum, tagged by category,
+        then lock and archive that forum post. Message 1 is the published document's
+        link; message 2 is the transcript, as text if it fits or a .txt attachment if
+        not (a real channel's history can exceed Discord's 2000-char message limit).
+        Any attachments posted in the channel are downloaded and re-uploaded, since
+        they'd otherwise be lost when the channel is deleted.
+        """
+        messages = [m async for m in channel.history(limit=None, oldest_first=True)]
+        transcript_text = build_channel_transcript(messages)
+
+        saved_attachments: list[tuple[str, bytes]] = []
+        for msg in messages:
+            for att in msg.attachments:
+                try:
+                    saved_attachments.append((att.filename, await att.read()))
+                except discord.HTTPException:
+                    pass
+
+        tags = []
+        category_name = record.get("category")
+        if category_name:
+            tag = await get_or_create_forum_tag(log_forum, category_name[:20])
+            if tag:
+                tags = [tag]
+
+        link_body = f"📄 **{record['title']}**\n{url}" if url else f"📄 **{record['title']}** (not published live)"
+        thread, _first_msg = await log_forum.create_thread(
+            name=f"{record['title']} — {record['filing_id']}"[:100],
+            content=link_body,
+            applied_tags=tags,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+        record["archived_thread_id"] = thread.id
+
+        body = transcript_text[:2000] if transcript_text else "(no messages)"
+        await thread.send(content=body, allowed_mentions=discord.AllowedMentions.none())
+        if len(transcript_text) > 2000:
+            fp = io.BytesIO(transcript_text.encode("utf-8"))
+            await thread.send(
+                content="Full transcript attached:",
+                file=discord.File(fp, filename=f"{record['filing_id']}.txt"),
+            )
+        if saved_attachments:
+            for i in range(0, len(saved_attachments), 10):
+                batch = saved_attachments[i : i + 10]
+                await thread.send(
+                    content="📎 Attachments:" if i == 0 else None,
+                    files=[discord.File(io.BytesIO(data), filename=name) for name, data in batch],
+                )
+        await thread.edit(archived=True, locked=True)
 
     async def takedown(self, guild: discord.Guild, filing_id: str) -> bool:
         """Remove a filed document: delete the local files and call unpublish (stub) if it was live."""

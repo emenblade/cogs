@@ -77,3 +77,31 @@ async def can_file_template(interaction: discord.Interaction, allowed_role_ids: 
     if interaction.user.guild_permissions.administrator:
         return True
     return any(check_staff_role(interaction, role_id) for role_id in allowed_role_ids)
+
+
+def build_channel_transcript(messages: list[discord.Message]) -> str:
+    """Build a plain-text transcript of a channel's full message history, oldest first."""
+    lines = []
+    for msg in messages:
+        ts = msg.created_at.strftime("%Y-%m-%d %H:%M UTC")
+        author = f"[BOT] {msg.author.display_name}" if msg.author.bot else msg.author.display_name
+        content = msg.content
+        if not content and msg.embeds:
+            titles = [e.title for e in msg.embeds if e.title]
+            content = f"[embed: {', '.join(titles)}]" if titles else "[embed]"
+        if content:
+            lines.append(f"[{ts}] {author}: {content}")
+        for att in msg.attachments:
+            lines.append(f"  [Attachment: {att.filename} — {att.url}]")
+    return "\n".join(lines)
+
+
+async def get_or_create_forum_tag(forum: discord.ForumChannel, name: str) -> discord.ForumTag | None:
+    """Return a forum tag by name, creating it if it doesn't exist yet."""
+    try:
+        existing = {t.name: t for t in forum.available_tags}
+        if name in existing:
+            return existing[name]
+        return await forum.create_tag(name=name)
+    except discord.HTTPException:
+        return None

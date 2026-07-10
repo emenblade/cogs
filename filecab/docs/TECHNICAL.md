@@ -23,17 +23,19 @@ once staff sign off.
   repo's `templates/` folder must follow. Also opportunistically fetches
   each template's optional `<template_id>.png` preview image the same way.
 - `filing.py` — `FilingManager` runs the DM Q&A flow, mints filing ids, posts
-  pending filings to a private review channel, handles approve/deny, and
-  publishes/takes down on explicit staff action.
+  pending filings to a private review channel, handles approve/deny, lets
+  anyone with channel access edit a field (staff can additionally add
+  people to the channel), publishes/takes down on explicit staff action,
+  and optionally archives+deletes a channel once its filing is published.
 - `publisher.py` — `DocumentPublisher`, pushes/removes filings on the
   configured site repo via `GitHubClient`.
 - `views.py` — all `discord.ui.View`/`Modal` classes: the setup wizard
   (including the site-repo step), the persistent document-type select panel,
   the staff `file` command's select, the persistent review view (dynamic
-  Assign buttons + Approve/Deny), the persistent signer-handoff DM view
-  (Sign/Decline), the persistent post-approval "Make Public" view, and the
-  settings panel (including template access gating and document
-  takedown/delete).
+  Assign buttons + Approve/Deny/Edit Field/Add Person), the persistent
+  signer-handoff DM view (Sign/Decline), the persistent post-approval
+  "Make Public" view, and the settings panel (including template access
+  gating, document takedown/delete, and the optional log forum).
 
 ## UI conventions
 
@@ -52,8 +54,9 @@ should match rather than invent its own:
   `Repost Panel`, `🌐 Make Public`, `✏️ Edit Field`, `👤 Add Person`, an
   unassigned signer's `➕ Assign {label}` state).
 - **Grey** — secondary / navigational / "opens another menu" (`Cancel`,
-  `Skip for Now`, `Template Access`, `Manage Documents`, `Open to Everyone`,
-  `🗑️ Take Down`, a pending signer's `⏳ {label}: awaiting reply` state).
+  `Skip for Now`, `Template Access`, `Manage Documents`, `📋 Log Forum`,
+  `Open to Everyone`, `🗑️ Take Down`, a pending signer's
+  `⏳ {label}: awaiting reply` state).
 
 `Cancel` is always grey, never red — red is reserved for an action that
 actually denies/declines/deletes something, and using it for a plain abort
@@ -247,7 +250,9 @@ send anything extra, no error or placeholder.
    channel; on success the button relabels to a disabled, green
    "✅ Published" (matching the "completed" color used elsewhere) and stays
    that way permanently — see "Persistence & restart safety" for why it
-   doesn't need re-registration after a restart. Status: `published`.
+   doesn't need re-registration after a restart. Status: `published`. Also
+   kicks off archiving the review channel — see "Archiving & channel
+   cleanup" below.
 7. **Take Down** (settings panel → Manage Documents → a filing → 🗑️ Take
    Down) → deletes the local files, calls `unpublish()` if it was live.
    Status: `removed`. The record itself is kept (title, answers, audit
@@ -296,6 +301,51 @@ beyond Approve/Deny/Assign:
   `channel.set_permissions` overwrite — the same mechanism the filer
   themselves was added with in step 1, not tracked anywhere in config since
   Discord persists the overwrite on its own.
+
+## Archiving & channel cleanup
+
+Entirely optional (`document_log_forum` unset by default) — without it,
+review channels just accumulate the way they always have. Configured via
+settings → **📋 Log Forum**, which is its own button opening a dedicated
+ephemeral select rather than a row on `SettingsPanelView` itself, since
+that panel is already at Discord's 5-row cap. The mechanism directly
+mirrors `forms/tickets.py`'s `close_ticket` — same shape, same
+`archived=True, locked=True` call, same >2000-char "post the truncated
+body, then attach the full thing as a `.txt` file" fallback that cog's own
+history discovered was necessary — with one bot-side permission
+requirement in common: whatever your `forms` ticket-log forum already
+needs to lock its own archived posts, this one needs too.
+
+`FilingManager.make_public` schedules `_archive_and_close` as a background
+task (same `PUBLISH_ANNOUNCE_DELAY_SECONDS` used for the "now public"
+announcement, so the site's GitHub Action has time to finish rebuilding
+before either fires — no point archiving a link that still 404s). Once
+that delay elapses:
+
+1. Announce the live link in the filing's channel (as before this existed).
+2. If no log forum is configured, or it's not actually a forum channel,
+   stop here — the review channel is left alone, same as if this feature
+   didn't exist. No silent data loss either way.
+3. `_archive_to_log` pulls the channel's *entire* message history
+   (`channel.history(limit=None, oldest_first=True)` — everything: the
+   original transcript, discussion, edit notices, sign confirmations, not
+   just the initial Q&A dump `_build_transcript` produces for the review
+   post) via `utils.build_channel_transcript`, and downloads every
+   attachment before the channel that hosts them is gone. A new forum post
+   goes up, tagged by `record["category"]` if set
+   (`utils.get_or_create_forum_tag`, creating the tag on first use — same
+   as `forms`): **message 1** is the published document's link (or a
+   "not published live" note if publishing isn't wired up); **message 2**
+   is the transcript, truncated to 2000 chars with the full text attached
+   as a `.txt` file if it ran over (exactly `forms`' fallback, for exactly
+   the reason it exists there — a real channel's history routinely exceeds
+   Discord's message limit); any attachments follow in their own
+   message(s), 10 per batch (Discord's per-message cap). The post is then
+   `thread.edit(archived=True, locked=True)` — closed, read-only, done.
+4. Only once that whole sequence has succeeded does `_archive_and_close`
+   delete the original channel. If archiving raises partway through, the
+   channel is deliberately **not** deleted — better a channel that should've
+   been cleaned up stays around than one that's actually lost.
 
 ## Persistence & restart safety
 
@@ -356,12 +406,14 @@ that push — filecab doesn't maintain any index itself.
 
 - **Guild**: `document_channel`, `document_review_category` (a **category** —
   each filing gets its own private text channel created under it, see
-  "Filing lifecycle"), `approval_role`, `panel_message_id`,
+  "Filing lifecycle"), `document_log_forum` (optional — a forum channel;
+  see "Archiving & channel cleanup"), `approval_role`, `panel_message_id`,
   `published_documents` (dict of `filing_id` → `{template_id, title,
   category, user_id, answers, filed_date, status, channel_id?, message_id?,
   signers, discussion, approved_by?, signed_date?, signed_by?, html_path?,
-  json_path?, published_url?}`, used for persistent-view re-registration and
-  the takedown command). `signers` is itself a dict of `role` → `{user_id,
+  json_path?, published_url?, archived_thread_id?}`, used for
+  persistent-view re-registration and the takedown command). `signers` is
+  itself a dict of `role` → `{user_id,
   status, dm_message_id}` (`status` ∈ `unassigned | pending | signed |
   declined | stale` — `stale` means they signed, but `FilingManager.
   edit_field` changed an answer since, so it no longer covers what they
