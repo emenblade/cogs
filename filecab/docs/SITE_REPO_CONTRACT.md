@@ -75,9 +75,13 @@ site's search index), `signers`, `fields`.
   `filled_by`. `null` means it's never asked in the DM Q&A — it's filled
   automatically (`auto`) or collected later from someone else (`judge` at
   approval time, or a `requires_handoff` role's assigned signer).
-- `type` — `string` | `text` (multi-line) | `date` | `signature` (informational
-  — the HTML itself controls cursive rendering via CSS class, this doesn't
-  drive bot behavior).
+- `type` — `string` | `text` (multi-line) | `date` | `signature` | `choice`
+  (informational only — the bot doesn't currently validate or restrict the
+  DM reply against `options` for a `choice` field, it's asked as free text
+  like any other type; the HTML itself controls cursive rendering via CSS
+  class for `signature`). `options` (a list of strings) is conventionally
+  paired with `choice` and mentioned in the prompt text itself, but nothing
+  in the bot enforces it yet.
 - `required` — whether an empty/skippable answer is allowed.
 - `filled_by` — `applicant`, `auto`, `judge`, or any `role` declared in
   `signers[]` with `requires_handoff: true`. Every non-`auto` value must match
@@ -86,6 +90,17 @@ site's search index), `signers`, `fields`.
   (filled the moment the DM Q&A finishes) or `"approval"` (filled when staff
   approve). There's no way to infer this from field position or naming —
   it must be set explicitly on every auto field.
+- `depends_on` (optional) — `{"field": key, "equals": value}`. When present,
+  this field is only asked over DM if the referenced field's answer equals
+  `value` exactly; `key` must refer to an earlier field in the same
+  `fields[]` array (one the filer will have already answered, or that was
+  itself skipped, by the time this one's turn comes up — dependencies
+  can chain, e.g. field C depending on field B which itself depends on
+  field A). When the condition isn't met, the field is skipped entirely —
+  never asked — and auto-filled with `skip_value` instead.
+- `skip_value` (used together with `depends_on`) — the value recorded for
+  this field when it's skipped. Falls back to an empty string if omitted on
+  a conditional field.
 - `note` (optional) — free text, not read by the bot; useful context for
   whoever edits the template next.
 

@@ -86,6 +86,22 @@ and refresh.
   session (`TemplateManager.prompted_fields`) — this covers `applicant`
   fields *and* `judge` fields on judge-authored templates (see below), with
   one rule. If `prompt` is `null`, the field is never asked in the DM flow.
+- **`depends_on`/`skip_value`** (optional, on any `prompt`-ed field):
+  `TemplateManager.field_applies`/`advance_past_skipped` check the
+  referenced earlier field's answer against `depends_on.equals` every time
+  the DM Q&A is about to move to the next question (`FilingManager.
+  start_filing` for a leading run of skippable fields, `handle_reply` after
+  every answer) — if it doesn't match, the field is auto-filled with
+  `skip_value` and never asked, and the check repeats for the next field
+  too, so a whole run of dependent fields (B depends on A, C depends on B,
+  ...) resolves in one pass once their common trigger is known. Since a
+  dependency is only ever resolved against answers already given (or
+  already skipped), this works for arbitrarily deep condition chains
+  without knowing anything about fields further down the form. Question
+  numbers ("Question N of Total") use the *fixed* total prompted-field
+  count, not a recount of what'll actually be asked — so skipped questions
+  can make the visible number jump (e.g. 12 → 14), which is expected, not
+  a bug.
 - **`fill_at`** (only meaningful on `"auto"` fields): `"submission"` fields
   are computed the moment the DM Q&A finishes; `"approval"` fields are
   computed when a staff member approves. There's no way to tell these apart

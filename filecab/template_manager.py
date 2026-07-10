@@ -130,6 +130,39 @@ class TemplateManager:
         return [f for f in spec["fields"] if f.get("prompt") is not None]
 
     @staticmethod
+    def field_applies(field: dict, answers: dict[str, str]) -> bool:
+        """True if a field's `depends_on` condition (if any) is met by the answers so far.
+
+        `depends_on` is `{"field": key, "equals": value}`, always referencing an
+        earlier field in the same template — by the time a later field is being
+        considered, whatever it depends on has already been asked (or skipped and
+        auto-filled). A field with no `depends_on` always applies.
+        """
+        depends_on = field.get("depends_on")
+        if not depends_on:
+            return True
+        return answers.get(depends_on["field"]) == depends_on["equals"]
+
+    def advance_past_skipped(
+        self, spec: dict, answers: dict[str, str], index: int
+    ) -> tuple[int, dict[str, str]]:
+        """From `index` into `prompted_fields(spec)`, auto-fill and skip past every field
+        whose `depends_on` condition isn't met, given `answers` so far.
+
+        Returns the index of the next field that should actually be asked — equal to
+        `len(prompted_fields(spec))` once nothing's left — plus an updated copy of
+        `answers` with each skipped field's `skip_value` filled in (empty string if a
+        conditional field omits `skip_value`).
+        """
+        prompted = self.prompted_fields(spec)
+        answers = dict(answers)
+        while index < len(prompted) and not self.field_applies(prompted[index], answers):
+            field = prompted[index]
+            answers[field["key"]] = field.get("skip_value", "")
+            index += 1
+        return index, answers
+
+    @staticmethod
     def approval_judge_fields(spec: dict) -> list[dict]:
         """Fields collected from the approving staff member, not the filer."""
         return [f for f in spec["fields"] if f["filled_by"] == "judge" and f.get("prompt") is None]

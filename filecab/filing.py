@@ -43,15 +43,19 @@ class FilingManager:
     async def start_filing(
         self, user: discord.User, guild: discord.Guild, template_id: str, dm: discord.DMChannel
     ) -> None:
-        """Set active_filing state and send the first field's prompt via DM."""
+        """Set active_filing state and send the first field's prompt via DM.
+
+        Any leading fields whose `depends_on` condition already fails against an
+        empty answers dict (unusual, but possible for a template authored oddly)
+        are skipped the same way `handle_reply` skips later ones.
+        """
         spec = self.templates.get(template_id)
         if not spec:
             await dm.send("❌ This document type is no longer available. Please contact staff.")
             return
 
         prompted = self.templates.prompted_fields(spec)
-        state = {"template_id": template_id, "guild_id": guild.id, "field_index": 0, "answers": {}}
-        await self.config.user(user).active_filing.set(state)
+        field_index, answers = self.templates.advance_past_skipped(spec, {}, 0)
 
         image_path = self.templates.preview_image_path(template_id)
         if image_path is not None:
@@ -61,10 +65,19 @@ class FilingManager:
                 file=discord.File(str(image_path)),
             )
 
+        if field_index >= len(prompted):
+            # Every prompted field was conditionally skipped — nothing left to ask.
+            await dm.send(f"👋 Filing a **{spec['title']}** — nothing else needed, submitting now.")
+            await self._submit(user, guild, spec, answers)
+            return
+
+        state = {"template_id": template_id, "guild_id": guild.id, "field_index": field_index, "answers": answers}
+        await self.config.user(user).active_filing.set(state)
+
         await dm.send(
             f"👋 Let's file a **{spec['title']}**! ({len(prompted)} question(s))\n"
             f"*Reply `cancel` at any time to cancel this filing.*\n\n"
-            f"**Question 1 of {len(prompted)}:** {prompted[0]['prompt']}"
+            f"**Question {field_index + 1} of {len(prompted)}:** {prompted[field_index]['prompt']}"
         )
 
     async def handle_reply(
@@ -94,21 +107,19 @@ class FilingManager:
             return
 
         current_field = prompted[state["field_index"]]
-        new_state = {
-            **state,
-            "field_index": state["field_index"] + 1,
-            "answers": {**state["answers"], current_field["key"]: answer},
-        }
+        answers = {**state["answers"], current_field["key"]: answer}
+        next_index, answers = self.templates.advance_past_skipped(spec, answers, state["field_index"] + 1)
 
-        if new_state["field_index"] >= len(prompted):
+        if next_index >= len(prompted):
             await self.config.user(member).active_filing.set(None)
             await message.channel.send("✅ **Filing complete!** Your document has been sent for staff review.")
-            await self._submit(member, guild, spec, new_state["answers"])
+            await self._submit(member, guild, spec, answers)
         else:
+            new_state = {**state, "field_index": next_index, "answers": answers}
             await self.config.user(member).active_filing.set(new_state)
-            next_field = prompted[new_state["field_index"]]
+            next_field = prompted[next_index]
             await message.channel.send(
-                f"**Question {new_state['field_index'] + 1} of {len(prompted)}:** {next_field['prompt']}"
+                f"**Question {next_index + 1} of {len(prompted)}:** {next_field['prompt']}"
             )
 
     async def _next_filing_id(self, template_id: str) -> str:
