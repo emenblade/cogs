@@ -1,5 +1,6 @@
 """Main Filecab cog class."""
 from __future__ import annotations
+import asyncio
 import discord
 from discord import app_commands
 from redbot.core import Config, commands
@@ -293,6 +294,87 @@ class Filecab(commands.Cog):
                 f"⚠️ Fetched 0 templates from `{site_repo}` — check the repo/branch are correct "
                 "and the `templates/` folder exists there."
             )
+
+    @filecab_group.command(name="nuke")
+    @commands.is_owner()
+    async def filecab_nuke(self, ctx: commands.Context) -> None:
+        """Permanently wipe all filing test data for this server (bot owner only).
+
+        Deletes every channel in the configured review category, every thread in
+        the configured log forum, every published document on the site repo, and
+        every filing record — meant to reset a test server to a clean slate before
+        going live. Templates and every other setting (channels, roles, site repo)
+        are left untouched. Also resets the filing ID counter, which is shared
+        bot-wide across every server this bot is in.
+
+        Irreversible — asks for a confirmation password in chat before doing
+        anything, and cancels if it's wrong or if you don't reply in time.
+        """
+        guild_conf = self.config.guild(ctx.guild)
+        published = await guild_conf.published_documents()
+
+        category_id = await guild_conf.document_review_category()
+        category = ctx.guild.get_channel(category_id) if category_id else None
+        channel_count = len(category.channels) if isinstance(category, discord.CategoryChannel) else 0
+
+        log_forum_id = await guild_conf.document_log_forum()
+        log_forum = ctx.guild.get_channel(log_forum_id) if log_forum_id else None
+        thread_count = 0
+        if isinstance(log_forum, discord.ForumChannel):
+            thread_count = len(log_forum.threads)
+            try:
+                async for _ in log_forum.archived_threads(limit=None):
+                    thread_count += 1
+            except discord.HTTPException:
+                pass
+
+        embed = discord.Embed(
+            title="☢️ Nuke Filing Data",
+            description=(
+                "This will **permanently delete**:\n"
+                f"• **{len(published)}** filing record(s)\n"
+                f"• **{channel_count}** channel(s) in the review category\n"
+                f"• **{thread_count}** thread(s) in the log forum\n"
+                "• Every published document on the site repo\n"
+                "• The filing ID counter (bot-wide — affects every server this bot serves)\n\n"
+                "Templates and every other setting are kept.\n\n"
+                "**This cannot be undone.** Reply with the confirmation password "
+                "within 60 seconds to proceed, or anything else to cancel."
+            ),
+            color=discord.Color.red(),
+        )
+        await ctx.send(embed=embed)
+
+        def check(m: discord.Message) -> bool:
+            return m.author.id == ctx.author.id and m.channel.id == ctx.channel.id
+
+        try:
+            reply = await self.bot.wait_for("message", check=check, timeout=60)
+        except asyncio.TimeoutError:
+            await ctx.send("⏱️ Timed out — nothing was deleted.")
+            return
+
+        if reply.content.strip().lower() != "canada":
+            await ctx.send("❌ Incorrect password — nothing was deleted.")
+            return
+
+        await ctx.send("☢️ Confirmed — wiping filing data now, this may take a moment...")
+        summary = await self.filing.wipe_guild_data(ctx.guild)
+
+        failures = ""
+        if summary["channels_failed"]:
+            failures += f" ({summary['channels_failed']} failed)"
+        thread_failures = f" ({summary['threads_failed']} failed)" if summary["threads_failed"] else ""
+
+        await ctx.send(
+            "✅ **Wipe complete.**\n"
+            f"• Filing records cleared: **{summary['records']}**\n"
+            f"• Local document files deleted: **{summary['local_files']}**\n"
+            f"• Published GitHub files removed: **{summary['github_files']}**\n"
+            f"• Review channels deleted: **{summary['channels_deleted']}**{failures}\n"
+            f"• Log forum threads deleted: **{summary['threads_deleted']}**{thread_failures}\n"
+            "• Filing ID counter reset."
+        )
 
     async def red_get_data_for_user(self, *, requester: str, user_id: int) -> dict:
         """Return all stored data for a user (required by RedBot)."""

@@ -50,6 +50,7 @@ Discord-native DOJ document filing. Members pick a document type from a dropdown
 - Optional log forum: whether a filing is published or denied, its channel's full history gets archived to a forum post (document link — also DMed straight to the filer — or a denial note, then the transcript as a `.txt` file if it's too long for one message), tagged by category, locked, and the now-redundant channel is deleted — same mechanism as the `forms` cog's ticket-closing flow
 - Settings panel: change core config, reload/refresh templates, repost the panel, manage per-template access gates, and take down or permanently delete previously filed documents
 - Persistent views survive bot restarts, including a graceful fallback if a filing's template is deleted out from under it
+- Bot-owner-only `filecab nuke` resets a test server to a clean slate — password-confirmed, wipes every filing record, published document, review channel, and log forum thread, while leaving templates and every other setting untouched
 - Slash command support (`/filecab setup`, `/filecab settings`, `/filecab file`)
 
 ### Install
@@ -70,6 +71,7 @@ Discord-native DOJ document filing. Members pick a document type from a dropdown
 | `/filecab file` | Staff / Admins | File any document type yourself, including judge-authored ones with no citizen role |
 | `/filecab templates` | Everyone | List currently loaded templates (local only, no network call) |
 | `/filecab refresh` | Staff / Admins | Fetch the latest templates from the configured site repo |
+| `/filecab nuke` | Bot Owner | Password-confirmed wipe of all filing test data (records, published documents, review channels, log forum) — templates and settings are kept |
 
 ### Documentation
 

@@ -10,7 +10,7 @@ once staff sign off.
 - `filecab.py` — the `Filecab` cog: Config schema, the `on_message` router
   (DMs during filing, plus logging review-channel conversation), persistent-
   view re-registration, and the `filecab` command group (`setup`, `settings`,
-  `file`, `templates`, `refresh`).
+  `file`, `templates`, `refresh`, `nuke`).
 - `github_client.py` — `GitHubClient`, a thin `aiohttp` wrapper around the
   GitHub REST API (list/get/put/delete file contents, plus a raw-bytes fetch
   for the optional preview image). Token comes from Red's own shared API
@@ -370,6 +370,43 @@ existed, since nothing short of Make Public ever touched the channel.
    is deliberately **not** deleted, and `archived_thread_id` is never
    persisted either — better a channel that should've been cleaned up
    stays around than one that's actually lost.
+
+## Nuke — wiping test data
+
+`filecab nuke` (`FilingManager.wipe_guild_data`) is a bot-owner-only
+(`@commands.is_owner()`, distinct from every other command in this cog which
+gates on the guild's approval role/admin) escape hatch for resetting a test
+server to a clean slate before going live — not part of the normal filing
+lifecycle. It posts a summary (record/channel/thread counts pulled live from
+Discord and config) and waits up to 60 seconds via `bot.wait_for("message",
+...)` for a chat reply matching the confirmation password (`"canada"`,
+matched case-insensitively/trimmed) from the invoking user in the same
+channel; anything else, or no reply in time, cancels with nothing touched.
+
+On confirmation, `wipe_guild_data`:
+
+1. Deletes every local `documents/<template_id>/<filing_id>.{html,json}` file
+   for every record in the guild's `published_documents`, and calls
+   `DocumentPublisher.unpublish()` for any that were `status: "published"`
+   (removing their GitHub `filings/` copies too) — mirrors `takedown`'s own
+   cleanup, just for every record at once.
+2. Clears `published_documents` back to `{}`.
+3. Deletes **every** channel actually found in the configured review category
+   (`category.channels`, not just ones with a tracked record) — catches
+   orphaned test channels from crashed/incomplete filings too.
+4. Deletes **every** thread actually found in the configured log forum, both
+   active (`forum.threads`) and archived (`async for ... in
+   forum.archived_threads(limit=None)`).
+5. Resets the global `filing_counters` to `{}` — bot-wide, not guild-scoped,
+   since counters aren't tracked per-guild; the confirmation embed calls this
+   out explicitly so it's never a silent side effect.
+
+Templates (`templates_path`, `template_access`) and every other guild
+setting (`document_channel`, `document_review_category`, `document_log_forum`,
+`approval_role`, `panel_message_id`, site repo config) are untouched — only
+user-filed data and its two review-artifact channels/threads are in scope.
+Per-item failures (a channel/thread that fails to delete) are counted
+separately and reported back rather than aborting the whole wipe.
 
 ## Persistence & restart safety
 

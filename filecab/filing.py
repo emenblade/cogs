@@ -824,6 +824,78 @@ class FilingManager:
         await guild_conf.published_documents.set(published)
         return True
 
+    async def wipe_guild_data(self, guild: discord.Guild) -> dict:
+        """Permanently erase every filing this guild has produced — local document
+        files, published GitHub files, review-category channels, log-forum threads,
+        and filing records — plus the bot-wide filing ID counter. Used only by the
+        owner-gated `filecab nuke` command to reset a test server to a clean slate.
+        Templates and all other guild config (channels, roles, site repo) are left
+        untouched.
+
+        Deletes every channel actually found in the review category (not just ones
+        with a tracked record) and every thread actually found in the log forum,
+        since orphaned test channels/threads with no matching record are exactly
+        the kind of leftover this is meant to clear.
+        """
+        guild_conf = self.config.guild(guild)
+        published = await guild_conf.published_documents()
+
+        summary = {
+            "records": len(published),
+            "local_files": 0,
+            "github_files": 0,
+            "channels_deleted": 0,
+            "channels_failed": 0,
+            "threads_deleted": 0,
+            "threads_failed": 0,
+        }
+
+        for filing_id, record in published.items():
+            template_id = record.get("template_id")
+            if not template_id:
+                continue
+            for path in (
+                self.templates.documents_path / template_id / f"{filing_id}.html",
+                self.templates.documents_path / template_id / f"{filing_id}.json",
+            ):
+                if path.exists():
+                    path.unlink()
+                    summary["local_files"] += 1
+            if record.get("status") == "published":
+                if await self.publisher.unpublish(template_id, filing_id):
+                    summary["github_files"] += 1
+
+        await guild_conf.published_documents.set({})
+
+        category_id = await guild_conf.document_review_category()
+        category = guild.get_channel(category_id) if category_id else None
+        if isinstance(category, discord.CategoryChannel):
+            for channel in list(category.channels):
+                try:
+                    await channel.delete(reason="Filecab: nuke — clearing test data")
+                    summary["channels_deleted"] += 1
+                except discord.HTTPException:
+                    summary["channels_failed"] += 1
+
+        log_forum_id = await guild_conf.document_log_forum()
+        log_forum = guild.get_channel(log_forum_id) if log_forum_id else None
+        if isinstance(log_forum, discord.ForumChannel):
+            threads = list(log_forum.threads)
+            try:
+                async for thread in log_forum.archived_threads(limit=None):
+                    threads.append(thread)
+            except discord.HTTPException:
+                pass
+            for thread in threads:
+                try:
+                    await thread.delete()
+                    summary["threads_deleted"] += 1
+                except discord.HTTPException:
+                    summary["threads_failed"] += 1
+
+        await self.config.filing_counters.set({})
+        return summary
+
     async def purge(self, guild: discord.Guild, filing_id: str) -> bool:
         """Permanently erase a filing: unpublish/delete files if still on file, then drop its record.
 
