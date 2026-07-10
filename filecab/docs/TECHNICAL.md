@@ -12,14 +12,16 @@ once staff sign off.
   view re-registration, and the `filecab` command group (`setup`, `settings`,
   `file`, `templates`, `refresh`).
 - `github_client.py` — `GitHubClient`, a thin `aiohttp` wrapper around the
-  GitHub REST API (list/get/put/delete file contents). Token comes from
-  Red's own shared API tokens (`[p]set api github token,<token>`), not
-  anything collected by the cog itself.
+  GitHub REST API (list/get/put/delete file contents, plus a raw-bytes fetch
+  for the optional preview image). Token comes from Red's own shared API
+  tokens (`[p]set api github token,<token>`), not anything collected by the
+  cog itself.
 - `template_manager.py` — `TemplateManager` loads HTML+JSON template pairs
   from `<cog_data_path>/templates/` and classifies fields. Populated by
   fetching from the configured site repo (`refresh_from_repo`, exposed as
   `filecab refresh`) — see `docs/SITE_REPO_CONTRACT.md` for the schema that
-  repo's `templates/` folder must follow.
+  repo's `templates/` folder must follow. Also opportunistically fetches
+  each template's optional `<template_id>.png` preview image the same way.
 - `filing.py` — `FilingManager` runs the DM Q&A flow, mints filing ids, posts
   pending filings to a private review thread, handles approve/deny, and
   publishes/takes down on explicit staff action.
@@ -163,26 +165,35 @@ public site is a separate, explicit step, so e.g. a warrant isn't visible
 before police have acted on it. Approve itself stays disabled until every
 handoff signer role has signed.
 
+If a template has an optional preview image (`templates/<template_id>.png`
+— see `docs/SITE_REPO_CONTRACT.md`), `TemplateManager.preview_image_path`
+is checked at every point someone's about to see the document for the first
+time — starting the DM Q&A, being asked to sign, and the review thread's
+opening post — and the image is sent alongside a short explanatory message
+if it's there. Purely cosmetic: if there's no image, none of those checks
+send anything extra, no error or placeholder.
+
 1. **DM Q&A completes** → `"submission"` auto fields are filled with today's
    date → a `filing_id` (`<template_id>-<year>-<seq>`, from the global
    per-template-per-year counter in `filing_counters`) is minted → the
    filing's `signers` map is seeded (one `{user_id: null, status:
    "unassigned", dm_message_id: null}` entry per handoff role) → a **private**
-   thread is created in the configured review channel with the Q&A
-   transcript and `FilingReviewView` (one "➕ Assign X" button per handoff
-   role, plus Approve/Deny), and the filer is added to it directly
-   (`Thread.add_user`, `invitable=False` so only staff with Manage Messages
-   can add anyone else) — they can see and post in their own filing's
-   thread, like a support ticket, but have no access to any other filing's
-   thread; that isolation is Discord's own private-thread membership model,
-   not something the bot enforces. Status: `pending`. Nothing is rendered
-   yet.
+   thread is created in the configured review channel with (optionally) the
+   preview image, then the Q&A transcript and `FilingReviewView` (one
+   "➕ Assign X" button per handoff role, plus Approve/Deny), and the filer
+   is added to it directly (`Thread.add_user`, `invitable=False` so only
+   staff with Manage Messages can add anyone else) — they can see and post
+   in their own filing's thread, like a support ticket, but have no access
+   to any other filing's thread; that isolation is Discord's own
+   private-thread membership model, not something the bot enforces.
+   Status: `pending`. Nothing is rendered yet.
 2. **Assign** (staff click "➕ Assign Witness" etc.) → permission-checked, then
    an ephemeral `UserSelect` — no @-mention typing, since DMs can't resolve
    mentions — picking a member calls `FilingManager.assign_signer`, which DMs
-   them the transcript + a persistent `SignerRequestView` (Sign/Decline),
-   sets that role's `status: "pending"`, and rebuilds the review message
-   (button becomes a disabled "⏳ waiting on @user").
+   them (optionally) the preview image, then the transcript + a persistent
+   `SignerRequestView` (Sign/Decline), sets that role's `status: "pending"`,
+   and rebuilds the review message (button becomes a disabled "⏳ waiting on
+   @user").
 3. **Sign** → a modal (reusing the same pattern as judge sign-off) collects
    that role's field(s); `FilingManager.sign` merges the answer into the
    filing and sets `status: "signed"` — once every handoff role reads

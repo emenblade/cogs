@@ -29,7 +29,12 @@ class TemplateManager:
         self.reload()
 
     async def refresh_from_repo(self, github, owner: str, repo: str, branch: str) -> int:
-        """Fetch every template pair from `<repo>/templates/` and reload. Returns the count fetched."""
+        """Fetch every template pair from `<repo>/templates/` and reload. Returns the count fetched.
+
+        Also opportunistically fetches `templates/<template_id>.png` as an optional preview
+        image — purely cosmetic, so a missing one is silently skipped rather than treated
+        as a fetch failure.
+        """
         entries = await github.list_directory(owner, repo, "templates", branch)
         json_entries = [
             e for e in entries
@@ -43,6 +48,7 @@ class TemplateManager:
                 continue
             try:
                 spec = json.loads(text)
+                template_id = spec["template_id"]
                 html_file = spec["html_file"]
             except (json.JSONDecodeError, KeyError, TypeError):
                 continue
@@ -52,10 +58,20 @@ class TemplateManager:
 
             (self.templates_path / entry["name"]).write_text(text, encoding="utf-8")
             (self.templates_path / html_file).write_text(html_text, encoding="utf-8")
+
+            image_bytes = await github.get_file_bytes(owner, repo, f"templates/{template_id}.png", branch)
+            if image_bytes is not None:
+                (self.templates_path / f"{template_id}.png").write_bytes(image_bytes)
+
             fetched += 1
 
         self.reload()
         return fetched
+
+    def preview_image_path(self, template_id: str) -> Path | None:
+        """Return a template's optional preview image path, or None if it doesn't have one."""
+        path = self.templates_path / f"{template_id}.png"
+        return path if path.exists() else None
 
     def reload(self) -> dict[str, dict]:
         """Re-scan the templates directory for HTML+JSON pairs. Returns the loaded set."""

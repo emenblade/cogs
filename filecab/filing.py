@@ -52,6 +52,14 @@ class FilingManager:
         state = {"template_id": template_id, "guild_id": guild.id, "field_index": 0, "answers": {}}
         await self.config.user(user).active_filing.set(state)
 
+        image_path = self.templates.preview_image_path(template_id)
+        if image_path is not None:
+            await dm.send(
+                "🖼️ Here's an example of what this document looks like — I'll ask you for "
+                "each field in it now.",
+                file=discord.File(str(image_path)),
+            )
+
         await dm.send(
             f"👋 Let's file a **{spec['title']}**! ({len(prompted)} question(s))\n"
             f"*Reply `cancel` at any time to cancel this filing.*\n\n"
@@ -186,6 +194,14 @@ class FilingManager:
             reason=f"Filecab review thread for {filing_id}",
         )
         await thread.add_user(member)
+
+        image_path = self.templates.preview_image_path(record["template_id"])
+        if image_path is not None:
+            await thread.send(
+                "🖼️ Here's an example of what this document looks like.",
+                file=discord.File(str(image_path)),
+            )
+
         # Transcript embeds raw DM answers — suppress @everyone/@here/role/other-user
         # mentions someone could try to sneak in via a free-text answer. The filer's
         # own "Filed by:" mention is bot-constructed, not user free text, so it's
@@ -286,6 +302,12 @@ class FilingManager:
 
         try:
             dm = await member.create_dm()
+            image_path = self.templates.preview_image_path(record["template_id"])
+            if image_path is not None:
+                await dm.send(
+                    "🖼️ Here's an example of the document you're being asked to sign.",
+                    file=discord.File(str(image_path)),
+                )
             dm_msg = await dm.send(
                 f"You've been asked to sign as **{signer_spec['label']}** on a "
                 f"**{spec['title']}**, filed by {filer_label}.\n\n{content}",

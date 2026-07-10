@@ -95,6 +95,17 @@ The rendered facsimile, referenced by `html_file`. `{{key}}` placeholders are
 substituted via plain regex (not a templating engine) — every field's `key`
 must appear exactly once as `{{key}}` somewhere in the HTML.
 
+## `templates/<template_id>.png` (optional)
+
+A blank preview image of the document — e.g. a screenshot of the rendered
+HTML with no fields filled in. Purely cosmetic and entirely optional: if
+present, the bot sends it (with a short "here's what this looks like"
+message) when someone starts filing the template, when a handoff signer is
+asked to sign, and in the filing's review thread; if absent, none of those
+messages get sent — filecab never errors or warns about a missing one.
+Fetched by filename convention (`<template_id>.png`), not referenced from
+the `.json` manifest.
+
 ## `filings/<template_id>/<filing_id>.html` + `.json`
 
 Written by the bot on approval (`.html`) and on **Make Public** (both files

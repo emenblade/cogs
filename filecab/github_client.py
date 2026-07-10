@@ -60,6 +60,16 @@ class GitHubClient:
                 return None
             return await resp.text()
 
+    async def get_file_bytes(self, owner: str, repo: str, path: str, branch: str) -> bytes | None:
+        """Fetch a single file's raw binary content (e.g. an image), or None if it doesn't exist."""
+        session = await self._get_session()
+        headers = await self._headers(raw=True)
+        url = f"{API_BASE}/repos/{owner}/{repo}/contents/{path}"
+        async with session.get(url, headers=headers, params={"ref": branch}) as resp:
+            if resp.status != 200:
+                return None
+            return await resp.read()
+
     async def _get_sha(self, owner: str, repo: str, path: str, branch: str) -> str | None:
         session = await self._get_session()
         headers = await self._headers()
