@@ -26,16 +26,16 @@ class Filecab(commands.Cog):
         """Register config defaults, load templates, and re-register persistent views."""
         self.config.register_guild(
             document_channel=None,
-            document_review_channel=None,
+            document_review_category=None,
             approval_role=None,
             panel_message_id=None,
             published_documents={},
             # {filing_id: {template_id, title, category, user_id, answers, filed_date, status,
-            #              thread_id?, message_id?, discussion, approved_by?, signed_date?,
+            #              channel_id?, message_id?, discussion, approved_by?, signed_date?,
             #              signed_by?, html_path?, json_path?, published_url?}}
             # discussion is a list of {author_id, author_label, content, at} — every human
-            # message posted in the filing's private review thread (filer included), kept
-            # even if the thread itself is later archived/deleted.
+            # message posted in the filing's private review channel (filer included), kept
+            # even if the channel itself is later deleted.
             template_access={},
             # {template_id: [role_id, ...]} — templates not listed here (or
             # mapped to an empty list) are open to everyone. Only checked on
@@ -109,7 +109,7 @@ class Filecab(commands.Cog):
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:
-        """Route DM replies to the filing flow, and log review-thread conversation."""
+        """Route DM replies to the filing flow, and log review-channel conversation."""
         if message.author.bot:
             return
 
@@ -129,8 +129,8 @@ class Filecab(commands.Cog):
             await self.filing.handle_reply(member, guild, state, message)
             return
 
-        if isinstance(message.channel, discord.Thread) and message.type == discord.MessageType.default:
-            await self.filing.log_thread_message(message.guild, message.channel, message)
+        if isinstance(message.channel, discord.TextChannel) and message.type == discord.MessageType.default:
+            await self.filing.log_review_message(message.guild, message.channel, message)
 
     def _is_staff(self, ctx: commands.Context, approval_role_id: int | None) -> bool:
         if ctx.author.guild_permissions.administrator:
@@ -156,16 +156,19 @@ class Filecab(commands.Cog):
         Walks through a 4-step interactive wizard:
 
         Step 1 — Document channel: where the document-type select panel is posted.
-        Step 2 — Review channel: a text channel where each filing gets its own
-                  private thread with Approve/Deny buttons. The filer is added to
-                  their own thread so staff can ask follow-up questions directly —
-                  they can't see any other filing's thread. The bot needs
-                  **Create Private Threads**, **Send Messages in Threads**, and
-                  **Manage Messages** on that channel (Manage Messages is what
-                  Discord requires to add the filer to their thread — without
-                  it, filings fail after the thread is created); staff need
-                  **Manage Threads** there to see every filing's thread without
-                  being added to each one individually.
+        Step 2 — Review category: a **category**, not a channel. Each filing gets
+                  its own private text channel created under it, with Approve/Deny
+                  buttons, staff able to see it via the category's own permissions,
+                  and the filer added via a channel-specific permission overwrite —
+                  same mechanism as the `forms` cog's ticket channels, not threads
+                  (threads turned out not to reliably grant a non-member access no
+                  matter what permission the bot had). The category needs
+                  `@everyone` denied View Channel and your staff role granted it,
+                  same as you'd lock down any staff-only space; the bot's role
+                  needs **Manage Channels** and **Manage Roles** on the category
+                  (to create channels there with per-member overwrites) — if
+                  your `forms` ticket category already works, the bot's
+                  permissions there are the reference to copy.
         Step 3 — Approval role: who (besides admins) can approve/deny filings and
                   make them public.
         Step 4 — Site repository: the GitHub repo (`owner/repo`) that serves as
@@ -193,7 +196,7 @@ class Filecab(commands.Cog):
     async def filecab_settings(self, ctx: commands.Context) -> None:
         """Open the settings panel (staff and admins).
 
-        Lets you change the document channel, review channel, approval role, and
+        Lets you change the document channel, review category, approval role, and
         site repository; reload templates already on disk; re-post the document
         panel; restrict which roles can file particular templates; and take
         down or permanently delete previously filed documents. Use `filecab

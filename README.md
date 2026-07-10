@@ -37,12 +37,12 @@ Discord-native support tickets and application forms, driven entirely by buttons
 
 ## Filecab
 
-Discord-native DOJ document filing. Members pick a document type from a dropdown, answer questions one at a time over DM, and the finished document goes to a private staff review thread for Approve/Deny (with optional multi-signer handoff) before an explicit "Make Public" step publishes it to a GitHub Pages site.
+Discord-native DOJ document filing. Members pick a document type from a dropdown, answer questions one at a time over DM, and the finished document goes to a private staff review channel for Approve/Deny (with optional multi-signer handoff) before an explicit "Make Public" step publishes it to a GitHub Pages site.
 
 **Features:**
-- 4-step setup wizard (document channel, review channel, approval role, site repository)
+- 4-step setup wizard (document channel, review category, approval role, site repository)
 - Templates are fetched from a configured GitHub repo, not bundled with the cog — add a template pair to the repo and `filecab refresh`, no code changes needed
-- Each filing gets its own private review thread, and the filer is added to it directly — staff can ask follow-up questions like a support ticket, with no visibility into any other filing's thread. The conversation is saved even if the thread is later archived or deleted
+- Each filing gets its own private channel under the review category (same mechanism as the `forms` cog's ticket channels), and the filer is added to it directly — staff can ask follow-up questions like a support ticket, with no visibility into any other filing's channel. The conversation is saved even if the channel is later deleted
 - Multi-signer handoff: staff assign real Discord members to a filing's other roles, who get DM'd a Sign/Decline request
 - Per-template filing access gates — restrict which roles can file a given document type; staff always bypass via `filecab file`
 - Settings panel: change core config, reload/refresh templates, repost the panel, manage per-template access gates, and take down or permanently delete previously filed documents

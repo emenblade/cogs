@@ -8,7 +8,7 @@ once staff sign off.
 ## Architecture
 
 - `filecab.py` — the `Filecab` cog: Config schema, the `on_message` router
-  (DMs during filing, plus logging review-thread conversation), persistent-
+  (DMs during filing, plus logging review-channel conversation), persistent-
   view re-registration, and the `filecab` command group (`setup`, `settings`,
   `file`, `templates`, `refresh`).
 - `github_client.py` — `GitHubClient`, a thin `aiohttp` wrapper around the
@@ -23,7 +23,7 @@ once staff sign off.
   repo's `templates/` folder must follow. Also opportunistically fetches
   each template's optional `<template_id>.png` preview image the same way.
 - `filing.py` — `FilingManager` runs the DM Q&A flow, mints filing ids, posts
-  pending filings to a private review thread, handles approve/deny, and
+  pending filings to a private review channel, handles approve/deny, and
   publishes/takes down on explicit staff action.
 - `publisher.py` — `DocumentPublisher`, pushes/removes filings on the
   configured site repo via `GitHubClient`.
@@ -148,7 +148,7 @@ configuration, since `filecab file` always bypasses the gate.
 
 `SettingsPanelView` and `StaffFileSelectView` both override
 `interaction_check` to re-validate staff/admin on every click, matching the
-per-click checks the review-thread views already used. This matters because
+per-click checks the review-channel views already used. This matters because
 `filecab_settings`/`filecab_file` send their view via `ctx.send(...,
 ephemeral=True)`, and Red's hybrid commands silently drop `ephemeral` when
 invoked with a text prefix instead of a slash command — without the
@@ -168,7 +168,7 @@ handoff signer role has signed.
 If a template has an optional preview image (`templates/<template_id>.png`
 — see `docs/SITE_REPO_CONTRACT.md`), `TemplateManager.preview_image_path`
 is checked at every point someone's about to see the document for the first
-time — starting the DM Q&A, being asked to sign, and the review thread's
+time — starting the DM Q&A, being asked to sign, and the review channel's
 opening post — and the image is sent alongside a short explanatory message
 if it's there. Purely cosmetic: if there's no image, none of those checks
 send anything extra, no error or placeholder.
@@ -177,26 +177,32 @@ send anything extra, no error or placeholder.
    date → a `filing_id` (`<template_id>-<year>-<seq>`, from the global
    per-template-per-year counter in `filing_counters`) is minted → the
    filing's `signers` map is seeded (one `{user_id: null, status:
-   "unassigned", dm_message_id: null}` entry per handoff role) → a **private**
-   thread is created in the configured review channel with (optionally) the
-   preview image, then the Q&A transcript and `FilingReviewView` (one
-   "➕ Assign X" button per handoff role, plus Approve/Deny), and the filer
-   is added to it directly (`Thread.add_user`, `invitable=False` so nobody
-   but the bot/staff can add anyone else) — they can see and post in their
-   own filing's thread, like a support ticket, but have no access to any
-   other filing's thread; that isolation is Discord's own private-thread
-   membership model, not something the bot enforces. **The bot's own role
-   needs Manage Messages on the review channel** — Discord requires it to
-   add a member to a non-invitable private thread (`Thread.add_user`'s own
-   docs say so), and without it `add_user` raises `Forbidden` (error 50001)
-   after the thread's already been created. `_post_review` treats any
-   failure past that point as recoverable, not fatal: it deletes the
-   half-created thread, saves the filing's record regardless (so the
-   answers are never lost even though `thread_id`/`message_id` stay unset),
-   posts a plain fallback message with the transcript to the review channel
-   itself (needs only Send Messages, not thread permissions), and tells the
-   filer something went wrong rather than leaving them thinking it worked.
-   Status: `pending`. Nothing is rendered yet.
+   "unassigned", dm_message_id: null}` entry per handoff role) → a **private
+   text channel** is created under the configured review category, with
+   (optionally) the preview image, then the Q&A transcript and
+   `FilingReviewView` (one "➕ Assign X" button per handoff role, plus
+   Approve/Deny). The channel is created with an explicit permission
+   overwrite granting the filer `view_channel`/`send_messages` on just that
+   one channel — the same mechanism the `forms` cog's ticket channels
+   already use, **not threads**. An earlier version of this used a private
+   thread with `Thread.add_user`, which turned out not to reliably grant
+   access no matter what permission the bot had (confirmed against a real
+   server, including a manual add attempt by the server owner) — threads
+   just don't behave like an independent per-member ACL the way a channel's
+   own permission overwrites do, so this now creates a real channel instead.
+   `_post_review` handles two distinct failure points, neither of which can
+   silently drop the filing (the citizen's already been told in
+   `handle_reply` that it was submitted, before this even runs): if
+   `category.create_text_channel()` itself fails (most likely the bot's
+   role missing **Manage Channels**/**Manage Roles** on the category —
+   needed to create a channel there with a custom overwrite at all), there's
+   no channel to fall back to, so it just tells the filer and saves the
+   record with `channel_id`/`message_id` left unset; if something fails
+   *after* the channel exists (posting the transcript, etc.), the channel
+   itself already has the right permissions for staff to see it, so the
+   fallback error message goes straight into it instead. Either way the
+   record is always saved regardless of the outcome. Status: `pending`.
+   Nothing is rendered yet.
 2. **Assign** (staff click "➕ Assign Witness" etc.) → permission-checked, then
    an ephemeral `UserSelect` — no @-mention typing, since DMs can't resolve
    mentions — picking a member calls `FilingManager.assign_signer`, which DMs
@@ -214,7 +220,7 @@ send anything extra, no error or placeholder.
    collects them; `"approval"` auto fields are filled with today's date;
    the full answer set (applicant + signer + judge) is rendered and both
    `documents/<template_id>/<filing_id>.html` and a sidecar `.json` are saved
-   locally (`TemplateManager.save_document`/`save_sidecar`). The thread's
+   locally (`TemplateManager.save_document`/`save_sidecar`). The channel's
    view is swapped to `ApprovedDocumentView` (a persistent "🌐 Make Public"
    button). Status: `approved` — on file, not public yet.
 5. **Deny** → notifies the filer and disables any signer DM requests still
@@ -234,20 +240,19 @@ send anything extra, no error or placeholder.
    filing was still `approved`/`published`, then erases the guild config
    record entirely (`FilingManager.purge`). Irreversible; gated behind an
    extra confirmation step since it drops the stored answers for good.
-   Pending filings aren't eligible (deny it first) so an open review thread
+   Pending filings aren't eligible (deny it first) so an open review channel
    never loses the record it's referencing. Manage Documents lists every
    non-`pending` filing (any status), not just published ones, so denied or
    already-taken-down filings can be purged too.
 
 Throughout all of the above, staff and the filer can talk directly in the
-filing's private thread — there's no dedicated "ask a question" button,
-it's just a normal Discord conversation once the filer's been added.
+filing's private channel — there's no dedicated "ask a question" button,
+it's just a normal Discord conversation once the filer's channel exists.
 `Filecab.on_message` picks up every human message posted there (matched by
-`thread.parent_id` == the configured review channel, then `thread_id` on
-the filing record) via `FilingManager.log_thread_message`, and appends it to
-that filing's `discussion` list in config — a durable copy of the
-conversation that outlives the thread itself if it's later archived or the
-channel is reconfigured.
+`channel.category_id` == the configured review category, then `channel_id`
+on the filing record) via `FilingManager.log_review_message`, and appends
+it to that filing's `discussion` list in config — a durable copy of the
+conversation that outlives the channel itself if it's later deleted.
 
 ## Persistence & restart safety
 
@@ -256,7 +261,7 @@ re-registers a matching view (same custom IDs) against the still-live
 message before anyone clicks them again — `discord.py` doesn't remember
 views across restarts on its own. Exactly four views in this cog are
 long-lived enough to need that: `TemplateSelectView` (the document panel),
-`FilingReviewView` (review-thread post), `SignerRequestView` (DM'd to a
+`FilingReviewView` (review-channel post), `SignerRequestView` (DM'd to a
 handoff signer), and `ApprovedDocumentView` (post-approval "Make Public").
 Everything else — the setup wizard, the settings panel and everything it
 opens (Template Access, Manage Documents, and their sub-views),
@@ -306,20 +311,21 @@ that push — filecab doesn't maintain any index itself.
 
 ## Config schema
 
-- **Guild**: `document_channel`, `document_review_channel` (a text channel —
-  each filing gets its own private thread inside it, see "Filing lifecycle"),
-  `approval_role`, `panel_message_id`, `published_documents` (dict of
-  `filing_id` → `{template_id, title, category, user_id, answers, filed_date,
-  status, thread_id?, message_id?, signers, discussion, approved_by?,
-  signed_date?, signed_by?, html_path?, json_path?, published_url?}`, used
-  for persistent-view re-registration and the takedown command). `signers`
-  is itself a dict of `role` → `{user_id, status, dm_message_id}` (`status`
-  ∈ `unassigned | pending | signed | declined`), one entry per
-  handoff-required signer role. `discussion` is a list of `{author_id,
-  author_label, content, at}`, one entry per human message posted in the
-  filing's private review thread. `template_access` (dict of `template_id`
-  → `[role_id, ...]`; a template missing from this dict, or mapped to an
-  empty list, is open to everyone — see "Filing access gates" above).
+- **Guild**: `document_channel`, `document_review_category` (a **category** —
+  each filing gets its own private text channel created under it, see
+  "Filing lifecycle"), `approval_role`, `panel_message_id`,
+  `published_documents` (dict of `filing_id` → `{template_id, title,
+  category, user_id, answers, filed_date, status, channel_id?, message_id?,
+  signers, discussion, approved_by?, signed_date?, signed_by?, html_path?,
+  json_path?, published_url?}`, used for persistent-view re-registration and
+  the takedown command). `signers` is itself a dict of `role` → `{user_id,
+  status, dm_message_id}` (`status` ∈ `unassigned | pending | signed |
+  declined`), one entry per handoff-required signer role. `discussion` is a
+  list of `{author_id, author_label, content, at}`, one entry per human
+  message posted in the filing's private review channel. `template_access`
+  (dict of `template_id` → `[role_id, ...]`; a template missing from this
+  dict, or mapped to an empty list, is open to everyone — see "Filing
+  access gates" above).
 - **User**: `active_filing` (`{"template_id", "guild_id", "field_index",
   "answers"}`), the in-progress DM Q&A state.
 - **Global**: `filing_counters` (`{"<template_id>-<year>": int}`, backing the

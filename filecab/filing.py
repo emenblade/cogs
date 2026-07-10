@@ -8,6 +8,7 @@ from redbot.core import Config
 from redbot.core.bot import Red
 from .template_manager import TemplateManager
 from .publisher import DocumentPublisher
+from .utils import slugify
 
 # How long to wait before announcing a filing is live, so the site's GitHub
 # Action has time to rebuild/deploy before anyone clicks the link.
@@ -159,31 +160,34 @@ class FilingManager:
         filing_id: str,
         record: dict,
     ) -> None:
-        """Post a Q&A transcript + Approve/Deny/Assign view to a private review thread.
+        """Post a Q&A transcript + Approve/Deny/Assign view to a private review channel.
 
-        The thread is private and the filer is added to it directly — they can see
-        and post in their own filing's thread (so staff can ask follow-up questions
-        like a support ticket) but have no visibility into any other filing's thread,
-        since that isolation comes from Discord's private-thread membership rather
-        than anything the bot has to enforce itself.
+        Each filing gets its own text channel created under the configured review
+        category, with an explicit permission overwrite granting the filer access
+        to just that one channel — the same mechanism the `forms` cog's ticket
+        channels already use in production, not threads (a non-invitable private
+        thread's `add_user` turned out not to reliably grant access regardless of
+        the bot's permissions — see git history). The filer can see and post in
+        their own filing's channel, like a support ticket, but has no visibility
+        into any other filing's channel, since that isolation is an ordinary
+        per-channel permission overwrite, the same as every other private channel
+        on the server.
 
         By the time this runs, the filer has already been told (in `handle_reply`)
-        that their filing was submitted — so if anything here fails partway through
-        (most likely a missing Manage Messages permission on the review channel,
-        which Discord requires to add a member to a non-invitable private thread),
-        the answers must not just vanish. The record is always saved to config
-        (with thread_id/message_id left unset on failure) and both the filer and
-        the review channel get told something went wrong, rather than the filing
-        silently disappearing with no trace anywhere.
+        that their filing was submitted — so if anything here fails partway
+        through, the answers must not just vanish. The record is always saved to
+        config (with channel_id/message_id left unset if the channel itself
+        couldn't even be created) and the filer is told something went wrong
+        rather than the filing silently disappearing with no trace anywhere.
         """
         from .views import FilingReviewView
 
         guild_conf = self.config.guild(guild)
-        channel_id = await guild_conf.document_review_channel()
-        channel = guild.get_channel(channel_id) if channel_id else None
-        if not channel or not isinstance(channel, discord.TextChannel):
+        category_id = await guild_conf.document_review_category()
+        category = guild.get_channel(category_id) if category_id else None
+        if not category or not isinstance(category, discord.CategoryChannel):
             await member.send(
-                "⚠️ Your filing was completed but staff haven't configured a review channel "
+                "⚠️ Your filing was completed but staff haven't configured a review category "
                 "yet — please let them know so it can be processed."
             )
             return
@@ -197,18 +201,45 @@ class FilingManager:
         content, overflowed = _truncate_for_discord(transcript)
         view = FilingReviewView(self.config, self.bot, filing_id, spec, record["signers"])
 
-        thread = None
-        try:
-            thread = await channel.create_thread(
-                name=f"{spec['title']} — {member.name}"[:100],
-                invitable=False,
-                reason=f"Filecab review thread for {filing_id}",
-            )
-            await thread.add_user(member)
+        # Inherit the category's own overwrites (already has @everyone denied + staff
+        # allowed, same as any staff-only space) and layer on just the filer + bot.
+        overwrites = dict(category.overwrites)
+        overwrites[member] = discord.PermissionOverwrite(
+            view_channel=True, send_messages=True, read_message_history=True
+        )
+        overwrites[guild.me] = discord.PermissionOverwrite(
+            view_channel=True, send_messages=True, manage_channels=True, read_message_history=True
+        )
+        channel_name = slugify(f"{spec['title']}-{member.name}-{filing_id}", max_length=90, fallback=filing_id)
 
+        try:
+            channel = await category.create_text_channel(
+                channel_name,
+                overwrites=overwrites,
+                reason=f"Filecab review channel for {filing_id}",
+            )
+        except (discord.Forbidden, discord.HTTPException):
+            # Most likely cause: the bot's role is missing Manage Channels/Manage
+            # Roles on the review category. There's no channel to fall back to
+            # here — just make sure the filer isn't left thinking this worked,
+            # and the answers are still saved below.
+            try:
+                await member.send(
+                    "⚠️ Something went wrong setting up your filing for staff review — your "
+                    "answers weren't lost, but a developer needs to check the bot's "
+                    "permissions on the review category. Sorry for the trouble!"
+                )
+            except discord.Forbidden:
+                pass
+            published = await guild_conf.published_documents()
+            published[filing_id] = record
+            await guild_conf.published_documents.set(published)
+            return
+
+        try:
             image_path = self.templates.preview_image_path(record["template_id"])
             if image_path is not None:
-                await thread.send(
+                await channel.send(
                     "🖼️ Here's an example of what this document looks like.",
                     file=discord.File(str(image_path)),
                 )
@@ -217,31 +248,22 @@ class FilingManager:
             # mentions someone could try to sneak in via a free-text answer. The filer's
             # own "Filed by:" mention is bot-constructed, not user free text, so it's
             # explicitly allowed through.
-            first_msg = await thread.send(
+            first_msg = await channel.send(
                 content=content,
                 view=view,
                 allowed_mentions=discord.AllowedMentions(everyone=False, users=[member], roles=False),
             )
             if overflowed:
                 fp = io.BytesIO(transcript.encode("utf-8"))
-                await thread.send(file=discord.File(fp, filename=f"{filing_id}.txt"))
+                await channel.send(file=discord.File(fp, filename=f"{filing_id}.txt"))
 
-            record["thread_id"] = thread.id
+            record["channel_id"] = channel.id
             record["message_id"] = first_msg.id
         except (discord.Forbidden, discord.HTTPException) as exc:
-            if thread is not None:
-                try:
-                    await thread.delete()
-                except discord.HTTPException:
-                    pass
             try:
                 await channel.send(
-                    f"⚠️ Couldn't set up a private review thread for **{spec['title']}** filed "
-                    f"by {member.mention} (`{filing_id}`) — check the bot's permissions on this "
-                    f"channel (it needs **Manage Messages** to add the filer to a private "
-                    f"thread). Nothing was lost — the filer's answers are below and saved on "
-                    f"file; a developer or admin needs to look into this.\n\n{content}",
-                    allowed_mentions=discord.AllowedMentions(everyone=False, users=[member], roles=False),
+                    f"⚠️ Something went wrong finishing this filing's setup ({exc}) — the "
+                    "filer's answers are safe on file; a developer needs to look into this."
                 )
             except discord.HTTPException:
                 pass
@@ -257,50 +279,50 @@ class FilingManager:
         published[filing_id] = record
         await guild_conf.published_documents.set(published)
 
-    async def _get_thread(self, thread_id: int | None):
-        """Fetch a review thread by id, falling back to the API if not cached."""
-        if not thread_id:
+    async def _get_channel(self, channel_id: int | None):
+        """Fetch a review channel by id, falling back to the API if not cached."""
+        if not channel_id:
             return None
-        thread = self.bot.get_channel(thread_id)
-        if thread is None:
+        channel = self.bot.get_channel(channel_id)
+        if channel is None:
             try:
-                thread = await self.bot.fetch_channel(thread_id)
+                channel = await self.bot.fetch_channel(channel_id)
             except discord.HTTPException:
                 return None
-        return thread
+        return channel
 
     async def _refresh_review_message(self, guild: discord.Guild, record: dict, spec: dict) -> None:
-        """Re-render the review-thread message's view to reflect current signer state."""
+        """Re-render the review-channel message's view to reflect current signer state."""
         from .views import FilingReviewView
 
         message_id = record.get("message_id")
-        thread = await self._get_thread(record.get("thread_id"))
-        if not thread or not message_id:
+        channel = await self._get_channel(record.get("channel_id"))
+        if not channel or not message_id:
             return
         try:
-            message = await thread.fetch_message(message_id)
+            message = await channel.fetch_message(message_id)
         except discord.HTTPException:
             return
         view = FilingReviewView(self.config, self.bot, record["filing_id"], spec, record.get("signers", {}))
         await message.edit(view=view)
 
-    async def log_thread_message(
-        self, guild: discord.Guild, thread: discord.Thread, message: discord.Message
+    async def log_review_message(
+        self, guild: discord.Guild, channel: discord.TextChannel, message: discord.Message
     ) -> None:
-        """Persist a human message posted in a filing's private review thread.
+        """Persist a human message posted in a filing's private review channel.
 
-        Discord isolation (the filer only being a member of their own thread)
-        already keeps the conversation scoped correctly — this just keeps a
-        durable copy in config so the discussion survives even if the thread
-        is later archived or deleted.
+        The per-channel permission overwrite (the filer only having access to
+        their own filing's channel) already keeps the conversation scoped
+        correctly — this just keeps a durable copy in config so the discussion
+        survives even if the channel is later deleted.
         """
         guild_conf = self.config.guild(guild)
-        review_channel_id = await guild_conf.document_review_channel()
-        if not review_channel_id or thread.parent_id != review_channel_id:
+        review_category_id = await guild_conf.document_review_category()
+        if not review_category_id or channel.category_id != review_category_id:
             return
 
         published = await guild_conf.published_documents()
-        record = next((r for r in published.values() if r.get("thread_id") == thread.id), None)
+        record = next((r for r in published.values() if r.get("channel_id") == channel.id), None)
         if record is None:
             return
 
@@ -404,11 +426,11 @@ class FilingManager:
         spec = self.templates.get(record["template_id"])
         await self._refresh_review_message(guild, record, spec)
 
-        thread = await self._get_thread(record.get("thread_id"))
-        if thread and spec:
+        channel = await self._get_channel(record.get("channel_id"))
+        if channel and spec:
             signer_spec = next((s for s in spec.get("signers", []) if s["role"] == role), None)
             label = signer_spec["label"] if signer_spec else role
-            await thread.send(f"⚠️ **{label}** declined to sign. Staff can reassign via the Assign button.")
+            await channel.send(f"⚠️ **{label}** declined to sign. Staff can reassign via the Assign button.")
         return True
 
     async def approve(
@@ -521,15 +543,15 @@ class FilingManager:
         published[filing_id] = record
         await guild_conf.published_documents.set(published)
 
-        thread = await self._get_thread(record.get("thread_id"))
-        if thread is not None:
+        channel = await self._get_channel(record.get("channel_id"))
+        if channel is not None:
             if url:
                 # Give the site's GitHub Action time to rebuild before telling anyone
                 # it's live — don't block the caller (staff already got their own
                 # confirmation) waiting on this.
-                self.bot.loop.create_task(self._announce_live(thread, record["title"], url))
+                self.bot.loop.create_task(self._announce_live(channel, record["title"], url))
             else:
-                await thread.send(
+                await channel.send(
                     f"📄 **{record['title']}** approved and on file (site publishing isn't wired up "
                     "yet, so it isn't live).",
                     file=discord.File(str(html_path)),
@@ -537,10 +559,10 @@ class FilingManager:
         return url
 
     @staticmethod
-    async def _announce_live(thread, title: str, url: str) -> None:
+    async def _announce_live(channel, title: str, url: str) -> None:
         await asyncio.sleep(PUBLISH_ANNOUNCE_DELAY_SECONDS)
         try:
-            await thread.send(f"📄 **{title}** is now public — {url}")
+            await channel.send(f"📄 **{title}** is now public — {url}")
         except discord.HTTPException:
             pass
 
@@ -572,7 +594,7 @@ class FilingManager:
         Unlike `takedown`, this removes the stored answers entirely rather
         than leaving a `status: "removed"` record behind. Pending filings
         aren't eligible — deny it first (or let it run its course) so an
-        open review thread never loses the record it's referencing.
+        open review channel never loses the record it's referencing.
         """
         guild_conf = self.config.guild(guild)
         published = await guild_conf.published_documents()

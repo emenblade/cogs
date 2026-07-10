@@ -90,12 +90,14 @@ class WizardStep1View(_WizardStepView):
         embed = discord.Embed(
             title="Filecab Setup — Step 2 of 4",
             description=(
-                "Select the **review channel** — a text channel where each filing gets its "
-                "own private thread with Approve/Deny buttons, and the filer is added to "
-                "their own thread (but no others). The bot needs **Create Private Threads**, "
-                "**Send Messages in Threads**, and **Manage Messages** there (that last one "
-                "is required to add the filer to their thread); staff need **Manage Threads** "
-                "to see every filing's thread."
+                "Select the **review category** — each filing gets its own private text "
+                "channel created under it, with Approve/Deny buttons, and the filer added "
+                "to just that one channel (same mechanism as `forms`' ticket channels, not "
+                "threads). Deny `@everyone` View Channel on the category and grant it to "
+                "staff, same as any staff-only space; the bot's role needs **Manage "
+                "Channels** and **Manage Roles** on the category to create channels there "
+                "with per-member overwrites — if your `forms` ticket category already "
+                "works, copy the bot's permissions from there."
             ),
             color=discord.Color.blurple(),
         )
@@ -108,12 +110,12 @@ class WizardStep1View(_WizardStepView):
 
 
 class WizardStep2View(_WizardStepView):
-    """Step 2: select the review channel (a text channel — filings get private threads in it)."""
+    """Step 2: select the review category — filings get their own private channel under it."""
 
     @discord.ui.select(
         cls=discord.ui.ChannelSelect,
-        placeholder="Select the review channel…",
-        channel_types=[discord.ChannelType.text],
+        placeholder="Select the review category…",
+        channel_types=[discord.ChannelType.category],
     )
     async def channel_select(self, interaction: discord.Interaction, select: discord.ui.ChannelSelect):
         self._selected = select.values[0]
@@ -122,9 +124,9 @@ class WizardStep2View(_WizardStepView):
     @discord.ui.button(label="Confirm", style=discord.ButtonStyle.green)
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
         if self._selected is None:
-            await interaction.response.send_message("⚠️ Please select a channel first.", ephemeral=True)
+            await interaction.response.send_message("⚠️ Please select a category first.", ephemeral=True)
             return
-        await self.config.guild_from_id(self.guild_id).document_review_channel.set(self._selected.id)
+        await self.config.guild_from_id(self.guild_id).document_review_category.set(self._selected.id)
         self.stop()
         view = WizardStep3View(self.config, self.guild_id, self.bot)
         view.message = interaction.message
@@ -462,7 +464,7 @@ async def _finish_approval(
         return
     await origin_message.edit(view=ApprovedDocumentView(filing_id))
     await interaction.followup.send(
-        "✅ Approved and filed. Use **Make Public** on the thread whenever it's ready to go live.",
+        "✅ Approved and filed. Use **Make Public** in this channel whenever it's ready to go live.",
         ephemeral=True,
     )
 
@@ -479,7 +481,7 @@ def _assign_button_appearance(label: str, state: dict) -> tuple[discord.ButtonSt
 
 
 class _AssignButton(discord.ui.Button):
-    """One button per handoff signer role on the review-thread post."""
+    """One button per handoff signer role on the review-channel post."""
 
     def __init__(self, filing_id: str, role: str, label: str, state: dict):
         style, text, disabled = _assign_button_appearance(label, state)
@@ -539,7 +541,7 @@ class _AssignUserSelectView(_ExpiringView):
 
 
 class FilingReviewView(discord.ui.View):
-    """Review-thread view: one Assign button per handoff signer role, plus Approve/Deny.
+    """Review-channel view: one Assign button per handoff signer role, plus Approve/Deny.
 
     Approve is disabled until every handoff role has signed. `spec` can be
     None — the filing's template was deleted from the site repo since it was
@@ -707,7 +709,7 @@ class ApprovedDocumentView(discord.ui.View):
         await interaction.message.edit(view=self)
         if url:
             await interaction.followup.send(
-                f"🌐 Pushed — {url}\nAnnouncing it live in the thread in a couple minutes, "
+                f"🌐 Pushed — {url}\nAnnouncing it live in this channel in a couple minutes, "
                 "once the site's finished rebuilding.",
                 ephemeral=True,
             )
@@ -727,7 +729,7 @@ class SettingsPanelView(_ExpiringView):
     hybrid commands silently drop `ephemeral` when invoked with a text prefix rather
     than a slash command — the panel would otherwise be visible (and clickable) to
     any member in the channel. `interaction_check` re-validates staff/admin on every
-    click, matching the per-click checks already used on the review-thread views.
+    click, matching the per-click checks already used on the review-channel views.
     """
 
     def __init__(self, config: Config, bot):
@@ -758,14 +760,14 @@ class SettingsPanelView(_ExpiringView):
 
     @discord.ui.select(
         cls=discord.ui.ChannelSelect,
-        placeholder="Change review channel…",
-        channel_types=[discord.ChannelType.text],
+        placeholder="Change review category…",
+        channel_types=[discord.ChannelType.category],
         row=1,
     )
-    async def change_review_channel(self, interaction: discord.Interaction, select: discord.ui.ChannelSelect):
-        await self.config.guild(interaction.guild).document_review_channel.set(select.values[0].id)
+    async def change_review_category(self, interaction: discord.Interaction, select: discord.ui.ChannelSelect):
+        await self.config.guild(interaction.guild).document_review_category.set(select.values[0].id)
         await interaction.response.send_message(
-            f"✅ Review channel set to {select.values[0].mention}.", ephemeral=True
+            f"✅ Review category set to {select.values[0].mention}.", ephemeral=True
         )
 
     @discord.ui.select(
