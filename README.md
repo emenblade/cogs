@@ -44,7 +44,9 @@ Discord-native DOJ document filing. Members pick a document type from a dropdown
 - Templates are fetched from a configured GitHub repo, not bundled with the cog — add a template pair to the repo and `filecab refresh`, no code changes needed
 - Each filing gets its own private channel under the review category (same mechanism as the `forms` cog's ticket channels), and the filer is added to it directly — staff can ask follow-up questions like a support ticket, with no visibility into any other filing's channel. The conversation is saved even if the channel is later deleted
 - Multi-signer handoff: staff assign real Discord members to a filing's other roles, who get DM'd a Sign/Decline request
-- Per-template filing access gates — restrict which roles can file a given document type; staff always bypass via `filecab file`
+- Templates can mark fields conditional (`depends_on`/`skip_value`) so redundant follow-up questions get skipped automatically and auto-filled instead of asked
+- Anyone with access to a filing's channel — the filer included — can fix a wrong answer via Edit Field; if it had already been signed off on, editing warns first and marks the signature stale until the signer re-signs
+- Staff can add an extra person to a filing's channel on the fly, and per-template filing access gates restrict which roles can file a given document type in the first place; staff always bypass both via `filecab file`
 - Settings panel: change core config, reload/refresh templates, repost the panel, manage per-template access gates, and take down or permanently delete previously filed documents
 - Persistent views survive bot restarts, including a graceful fallback if a filing's template is deleted out from under it
 - Slash command support (`/filecab setup`, `/filecab settings`, `/filecab file`)

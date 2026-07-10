@@ -317,6 +317,106 @@ class FilingManager:
         view = FilingReviewView(self.config, self.bot, record["filing_id"], spec, record.get("signers", {}))
         await message.edit(view=view)
 
+    async def edit_field(
+        self,
+        guild: discord.Guild,
+        filing_id: str,
+        field_key: str,
+        new_value: str,
+        editor: discord.abc.User,
+    ) -> bool:
+        """Update one field's answer on a pending filing.
+
+        Open to anyone with access to the filing's review channel, not
+        staff-gated — the filer is meant to be able to fix their own answers
+        here too. If any signer had already signed, editing resets them to
+        "stale" (their signature no longer covers the current content) rather
+        than silently leaving a signature on outdated answers; Approve stays
+        locked until they're reassigned and re-sign, reusing the exact same
+        Assign/Sign flow as a first-time signer.
+        """
+        guild_conf = self.config.guild(guild)
+        published = await guild_conf.published_documents()
+        record = published.get(filing_id)
+        if not record or record["status"] != "pending":
+            return False
+
+        spec = self.templates.get(record["template_id"])
+        if not spec:
+            return False
+        field = next((f for f in spec["fields"] if f["key"] == field_key), None)
+        if not field:
+            return False
+
+        old_value = record["answers"].get(field_key, "")
+        record["answers"][field_key] = new_value
+
+        invalidated = []
+        for role, state in record.get("signers", {}).items():
+            if state.get("status") != "signed":
+                continue
+            state["status"] = "stale"
+            signer_spec = next((s for s in spec.get("signers", []) if s["role"] == role), None)
+            invalidated.append(signer_spec["label"] if signer_spec else role)
+
+        published[filing_id] = record
+        await guild_conf.published_documents.set(published)
+        await self._refresh_review_message(guild, record, spec)
+
+        channel = await self._get_channel(record.get("channel_id"))
+        if channel is not None:
+            old_display = old_value or "_(empty)_"
+            new_display = new_value or "_(empty)_"
+            notice = f"✏️ **{field['label']}** updated by {editor.mention}: ~~{old_display}~~ → **{new_display}**"
+            if invalidated:
+                notice += (
+                    f"\n⚠️ This invalidates the existing signature(s) from **{', '.join(invalidated)}** "
+                    "— use the Assign button(s) above to have them re-sign before this can be approved."
+                )
+            content, _ = _truncate_for_discord(notice)
+            # Old/new values are raw user-supplied text (same class of risk as the
+            # original transcript) — suppress @everyone/@here/role/other-user mentions.
+            try:
+                await channel.send(
+                    content,
+                    allowed_mentions=discord.AllowedMentions(everyone=False, users=[editor], roles=False),
+                )
+            except discord.HTTPException:
+                pass
+        return True
+
+    async def add_person_to_channel(
+        self,
+        guild: discord.Guild,
+        filing_id: str,
+        member: discord.abc.User,
+        added_by: discord.abc.User,
+    ) -> bool:
+        """Grant an extra Discord member access to a filing's private review channel."""
+        guild_conf = self.config.guild(guild)
+        published = await guild_conf.published_documents()
+        record = published.get(filing_id)
+        if not record:
+            return False
+        channel = await self._get_channel(record.get("channel_id"))
+        if channel is None:
+            return False
+        try:
+            await channel.set_permissions(
+                member,
+                overwrite=discord.PermissionOverwrite(
+                    view_channel=True, send_messages=True, read_message_history=True
+                ),
+                reason=f"Filecab: added by {added_by} to filing {filing_id}",
+            )
+        except (discord.Forbidden, discord.HTTPException):
+            return False
+        try:
+            await channel.send(f"👤 {member.mention} was added to this channel by {added_by.mention}.")
+        except discord.HTTPException:
+            pass
+        return True
+
     async def log_review_message(
         self, guild: discord.Guild, channel: discord.TextChannel, message: discord.Message
     ) -> None:

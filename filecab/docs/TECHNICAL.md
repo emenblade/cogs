@@ -43,13 +43,14 @@ should match rather than invent its own:
 - **Green** — confirm / positive / completed (`Confirm` in the setup wizard,
   `✅ Approve`, `✅ Sign`, a signer's `✅ {label}: signed` state, `✅ Published`
   once Make Public succeeds).
-- **Red** — destructive / negative outcome (`❌ Deny`, `❌ Decline`,
-  `❌ Delete Permanently`, `❌ Confirm Delete`, a declined signer's
-  `🔁 Reassign {label}` state).
+- **Red** — destructive / negative outcome, or a signer state that needs
+  re-engagement (`❌ Deny`, `❌ Decline`, `❌ Delete Permanently`,
+  `❌ Confirm Delete`, a declined signer's `🔁 Reassign {label}` state, a
+  stale signer's `🔁 Re-sign Needed: {label}` state).
 - **Blurple** — a primary, non-destructive action (`Set Site Repository`,
   `🔄 Reload Templates`, `🔄 Refresh Templates from Repo`, `Change Site Repo`,
-  `Repost Panel`, `🌐 Make Public`, an unassigned signer's `➕ Assign {label}`
-  state).
+  `Repost Panel`, `🌐 Make Public`, `✏️ Edit Field`, `👤 Add Person`, an
+  unassigned signer's `➕ Assign {label}` state).
 - **Grey** — secondary / navigational / "opens another menu" (`Cancel`,
   `Skip for Now`, `Template Access`, `Manage Documents`, `Open to Everyone`,
   `🗑️ Take Down`, a pending signer's `⏳ {label}: awaiting reply` state).
@@ -270,6 +271,32 @@ on the filing record) via `FilingManager.log_review_message`, and appends
 it to that filing's `discussion` list in config — a durable copy of the
 conversation that outlives the channel itself if it's later deleted.
 
+While a filing is `pending`, `FilingReviewView` also carries two buttons
+beyond Approve/Deny/Assign:
+
+- **✏️ Edit Field** (`FilingManager.edit_field`) — deliberately *not*
+  staff-gated, unlike every other button on this view; anyone with access to
+  the channel (the filer included) can fix a wrong answer. Only fields with
+  `filled_by: "applicant"` are offered — judge/signer fields already have
+  their own consent-gated flows (the approval modal, the sign-off DM), and
+  a generic edit button reaching into those would undermine them. If any
+  handoff signer has already signed, picking a field shows a warning first
+  ("editing this will invalidate their signature") before the modal opens;
+  confirming resets every currently-`signed` signer to a new `stale` status
+  (Approve stays locked the same way it does for `declined` — `approve()`
+  already requires every signer to read exactly `signed`) and posts a
+  `~~old~~ → **new**` notice in the channel. Reuses the *existing*
+  Assign/Sign machinery to get a fresh signature rather than inventing a
+  parallel one: `_assign_button_appearance` just needed one more branch
+  (`stale` → red `🔁 Re-sign Needed: {label}`, enabled), and
+  `assign_signer`/`sign` don't care what the signer's prior status was.
+- **👤 Add Person** (`FilingManager.add_person_to_channel`) — staff-gated,
+  unlike Edit Field. Grants an extra Discord member `view_channel`/
+  `send_messages`/`read_message_history` on that one channel via a plain
+  `channel.set_permissions` overwrite — the same mechanism the filer
+  themselves was added with in step 1, not tracked anywhere in config since
+  Discord persists the overwrite on its own.
+
 ## Persistence & restart safety
 
 Discord buttons/selects stop working after a process restart unless the bot
@@ -336,7 +363,10 @@ that push — filecab doesn't maintain any index itself.
   json_path?, published_url?}`, used for persistent-view re-registration and
   the takedown command). `signers` is itself a dict of `role` → `{user_id,
   status, dm_message_id}` (`status` ∈ `unassigned | pending | signed |
-  declined`), one entry per handoff-required signer role. `discussion` is a
+  declined | stale` — `stale` means they signed, but `FilingManager.
+  edit_field` changed an answer since, so it no longer covers what they
+  agreed to; treated identically to `declined` everywhere except the button
+  label), one entry per handoff-required signer role. `discussion` is a
   list of `{author_id, author_label, content, at}`, one entry per human
   message posted in the filing's private review channel. `template_access`
   (dict of `template_id` → `[role_id, ...]`; a template missing from this

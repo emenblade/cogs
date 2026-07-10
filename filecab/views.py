@@ -477,6 +477,8 @@ def _assign_button_appearance(label: str, state: dict) -> tuple[discord.ButtonSt
         return discord.ButtonStyle.grey, f"⏳ {label}: awaiting reply", True
     if status == "declined":
         return discord.ButtonStyle.red, f"🔁 Reassign {label}", False
+    if status == "stale":
+        return discord.ButtonStyle.red, f"🔁 Re-sign Needed: {label}", False
     return discord.ButtonStyle.blurple, f"➕ Assign {label}", False
 
 
@@ -560,10 +562,13 @@ class FilingReviewView(discord.ui.View):
 
         self.children[0].custom_id = f"filecab:approve:{filing_id}"
         self.children[1].custom_id = f"filecab:deny:{filing_id}"
+        self.children[2].custom_id = f"filecab:editfield:{filing_id}"
+        self.children[3].custom_id = f"filecab:addperson:{filing_id}"
 
         if spec is None:
             self.children[0].disabled = True
             self.children[0].label = "⚠️ Template Missing"
+            self.children[2].disabled = True
             return
 
         self.children[0].disabled = not all(
@@ -613,6 +618,173 @@ class FilingReviewView(discord.ui.View):
             item.disabled = True
         await interaction.message.edit(view=self)
         await interaction.followup.send("❌ Denied.", ephemeral=True)
+
+    @discord.ui.button(label="✏️ Edit Field", style=discord.ButtonStyle.blurple, custom_id="filecab:editfield:_")
+    async def edit_field(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Open to anyone with access to this channel — not staff-gated, unlike its
+        sibling buttons. The filer is meant to be able to fix their own answers here."""
+        cog = interaction.client.cogs["Filecab"]
+        published = await cog.config.guild(interaction.guild).published_documents()
+        record = published.get(self.filing_id)
+        if not record or record.get("status") != "pending":
+            await interaction.response.send_message(
+                "⚠️ This filing isn't open for editing anymore.", ephemeral=True
+            )
+            return
+        options = [
+            discord.SelectOption(
+                label=field["label"][:100],
+                value=field["key"],
+                description=f"Current: {record['answers'].get(field['key']) or '(empty)'}"[:100],
+            )
+            for field in TemplateManager.prompted_fields(self.spec)
+            if field.get("filled_by") == "applicant"
+        ][:25]
+        if not options:
+            await interaction.response.send_message(
+                "⚠️ There's nothing on this template that can be edited here.", ephemeral=True
+            )
+            return
+        view = EditFieldSelectView(self.filing_id, self.spec, record, options)
+        await interaction.response.send_message("Select a field to edit:", view=view, ephemeral=True)
+        view.message = await interaction.original_response()
+
+    @discord.ui.button(label="👤 Add Person", style=discord.ButtonStyle.blurple, custom_id="filecab:addperson:_")
+    async def add_person(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self._can_review(interaction):
+            await interaction.response.send_message(
+                "⚠️ You don't have permission to add people to this channel.", ephemeral=True
+            )
+            return
+        view = _AddPersonSelectView(self.filing_id)
+        await interaction.response.send_message(
+            "Select who to add to this channel:", view=view, ephemeral=True
+        )
+        view.message = await interaction.original_response()
+
+
+class _AddPersonSelectView(_ExpiringView):
+    """Ephemeral one-shot UserSelect shown when staff click Add Person."""
+
+    def __init__(self, filing_id: str):
+        super().__init__(timeout=120)
+        self.add_item(self._Select(filing_id))
+
+    class _Select(discord.ui.UserSelect):
+        def __init__(self, filing_id: str):
+            super().__init__(placeholder="Select a member to add…")
+            self.filing_id = filing_id
+
+        async def callback(self, interaction: discord.Interaction):
+            member = self.values[0]
+            await interaction.response.defer(ephemeral=True)
+            cog = interaction.client.cogs["Filecab"]
+            ok = await cog.filing.add_person_to_channel(
+                interaction.guild, self.filing_id, member, interaction.user
+            )
+            if ok:
+                await interaction.followup.send(f"✅ Added {member.mention} to this channel.", ephemeral=True)
+            else:
+                await interaction.followup.send(
+                    "⚠️ Couldn't add them — check the bot's permissions on this channel.", ephemeral=True
+                )
+
+
+class EditFieldSelectView(_ExpiringView):
+    """Ephemeral view: pick which field to edit on a pending filing."""
+
+    def __init__(self, filing_id: str, spec: dict, record: dict, options: list[discord.SelectOption]):
+        super().__init__(timeout=180)
+        self.filing_id = filing_id
+        self.spec = spec
+        self.record = record
+        self.add_item(self._FieldSelect(options))
+
+    class _FieldSelect(discord.ui.Select):
+        def __init__(self, options: list[discord.SelectOption]):
+            super().__init__(placeholder="Select a field to edit…", options=options)
+
+        async def callback(self, interaction: discord.Interaction):
+            view: EditFieldSelectView = self.view
+            field_key = self.values[0]
+            field = next(f for f in view.spec["fields"] if f["key"] == field_key)
+            current_value = view.record["answers"].get(field_key, "")
+
+            signed_labels = []
+            for role, state in view.record.get("signers", {}).items():
+                if state.get("status") != "signed":
+                    continue
+                signer_spec = next((s for s in view.spec.get("signers", []) if s["role"] == role), None)
+                signed_labels.append(signer_spec["label"] if signer_spec else role)
+
+            if signed_labels:
+                warn_view = _EditFieldWarningView(view.filing_id, field, current_value)
+                await interaction.response.edit_message(
+                    content=(
+                        f"⚠️ **{', '.join(signed_labels)}** already signed this document. Editing "
+                        "**"
+                        f"{field['label']}"
+                        "** will invalidate their signature(s) — they'll need to re-sign before "
+                        "this can be approved. Continue?"
+                    ),
+                    view=warn_view,
+                )
+                warn_view.message = await interaction.original_response()
+            else:
+                await interaction.response.send_modal(
+                    EditFieldModal(view.filing_id, field, current_value)
+                )
+
+
+class _EditFieldWarningView(_ExpiringView):
+    """Ephemeral confirm/cancel shown before editing a field on an already-signed filing."""
+
+    def __init__(self, filing_id: str, field: dict, current_value: str):
+        super().__init__(timeout=120)
+        self.filing_id = filing_id
+        self.field = field
+        self.current_value = current_value
+
+    @discord.ui.button(label="✏️ Continue to Edit", style=discord.ButtonStyle.blurple)
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(
+            EditFieldModal(self.filing_id, self.field, self.current_value)
+        )
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.grey)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.edit_message(content="Cancelled.", view=None)
+
+
+class EditFieldModal(discord.ui.Modal):
+    """Collects a new value for one field on a pending filing."""
+
+    def __init__(self, filing_id: str, field: dict, current_value: str):
+        super().__init__(title=f"Edit: {field['label']}"[:45])
+        self.filing_id = filing_id
+        self.field_key = field["key"]
+        max_len = 1000 if field.get("type") == "text" else 200
+        self.value_input = discord.ui.TextInput(
+            label=field["label"][:45],
+            style=discord.TextStyle.paragraph if field.get("type") == "text" else discord.TextStyle.short,
+            default=(current_value[:max_len] if current_value else None),
+            required=field.get("required", True),
+            max_length=max_len,
+        )
+        self.add_item(self.value_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        cog = interaction.client.cogs["Filecab"]
+        ok = await cog.filing.edit_field(
+            interaction.guild, self.filing_id, self.field_key, self.value_input.value, interaction.user
+        )
+        if ok:
+            await interaction.followup.send("✅ Field updated.", ephemeral=True)
+        else:
+            await interaction.followup.send(
+                "⚠️ Couldn't update — this filing may no longer be pending.", ephemeral=True
+            )
 
 
 class SignerRequestView(discord.ui.View):
