@@ -245,6 +245,9 @@ send anything extra, no error or placeholder.
    button). Status: `approved` — on file, not public yet.
 5. **Deny** → notifies the filer and disables any signer DM requests still
    awaiting a reply, so nobody can sign a dead filing. Status: `denied`.
+   Also archives and closes the review channel — see "Archiving & channel
+   cleanup" below; a denied filing has no other path to Make Public, so
+   this is the only cleanup it ever gets.
 6. **Make Public** (separate, whenever staff are ready) → calls
    `DocumentPublisher.publish()` (stub) and announces in the document
    channel; on success the button relabels to a disabled, green
@@ -316,17 +319,36 @@ history discovered was necessary — with one bot-side permission
 requirement in common: whatever your `forms` ticket-log forum already
 needs to lock its own archived posts, this one needs too.
 
-`FilingManager.make_public` schedules `_archive_and_close` as a background
-task (same `PUBLISH_ANNOUNCE_DELAY_SECONDS` used for the "now public"
-announcement, so the site's GitHub Action has time to finish rebuilding
-before either fires — no point archiving a link that still 404s). Once
-that delay elapses:
+Both ways a filing can leave `pending` — **Approve → Make Public** or
+**Deny** — funnel through the same `FilingManager._close_channel`, so
+every filing gets the same cleanup regardless of which way it ends; a
+denied filing was never able to get archived/closed at all before this
+existed, since nothing short of Make Public ever touched the channel.
 
-1. Announce the live link in the filing's channel (as before this existed).
-2. If no log forum is configured, or it's not actually a forum channel,
-   stop here — the review channel is left alone, same as if this feature
-   didn't exist. No silent data loss either way.
-3. `_archive_to_log` pulls the channel's *entire* message history
+- **Deny** calls `_close_channel` immediately (synchronously, no delay —
+  there's no site rebuild to wait for) with a plain `"❌ **{title}** —
+  denied"` summary line. `views.FilingReviewView.deny` disables its own
+  buttons and edits the review message *before* calling
+  `FilingManager.deny`, since that call may delete the very channel the
+  interaction is happening in — anything that still needs the message or
+  channel to exist has to happen first, and anything after is wrapped to
+  fail silently rather than crash the interaction.
+- **Make Public** schedules `_announce_and_close` as a background task
+  (`PUBLISH_ANNOUNCE_DELAY_SECONDS` — the site's GitHub Action needs time
+  to finish rebuilding, so neither the announcement nor the archive fires
+  against a link that still 404s). Once that delay elapses it announces the
+  live link in the channel **and DMs it to the filer directly** — so they
+  still have it even if they never revisit a channel that's about to be
+  archived away — then hands off to `_close_channel` with `"📄
+  **{title}**\n{url}"` (or a "not published live" note if publishing isn't
+  configured) as the summary line.
+
+`_close_channel` itself:
+
+1. If no log forum is configured, or it's not actually a forum channel,
+   stop — the review channel is left alone, same as if this feature didn't
+   exist. No silent data loss either way.
+2. `_archive_to_log` pulls the channel's *entire* message history
    (`channel.history(limit=None, oldest_first=True)` — everything: the
    original transcript, discussion, edit notices, sign confirmations, not
    just the initial Q&A dump `_build_transcript` produces for the review
@@ -334,18 +356,20 @@ that delay elapses:
    attachment before the channel that hosts them is gone. A new forum post
    goes up, tagged by `record["category"]` if set
    (`utils.get_or_create_forum_tag`, creating the tag on first use — same
-   as `forms`): **message 1** is the published document's link (or a
-   "not published live" note if publishing isn't wired up); **message 2**
+   as `forms`): **message 1** is the caller's `summary_line`; **message 2**
    is the transcript, truncated to 2000 chars with the full text attached
    as a `.txt` file if it ran over (exactly `forms`' fallback, for exactly
    the reason it exists there — a real channel's history routinely exceeds
    Discord's message limit); any attachments follow in their own
    message(s), 10 per batch (Discord's per-message cap). The post is then
-   `thread.edit(archived=True, locked=True)` — closed, read-only, done.
-4. Only once that whole sequence has succeeded does `_archive_and_close`
-   delete the original channel. If archiving raises partway through, the
-   channel is deliberately **not** deleted — better a channel that should've
-   been cleaned up stays around than one that's actually lost.
+   `thread.edit(archived=True, locked=True)` — closed, read-only, done. The
+   resulting thread id is saved back to the filing's record as
+   `archived_thread_id`.
+3. Only once that whole sequence has succeeded does `_close_channel` delete
+   the original channel. If archiving raises partway through, the channel
+   is deliberately **not** deleted, and `archived_thread_id` is never
+   persisted either — better a channel that should've been cleaned up
+   stays around than one that's actually lost.
 
 ## Persistence & restart safety
 

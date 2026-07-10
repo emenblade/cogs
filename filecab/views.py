@@ -612,12 +612,21 @@ class FilingReviewView(discord.ui.View):
             )
             return
         await interaction.response.defer(ephemeral=True)
-        cog = interaction.client.cogs["Filecab"]
-        await cog.filing.deny(interaction.guild, self.filing_id)
+        # Disable + save *before* calling filing.deny() — that call may archive and
+        # delete this very channel (see FilingManager._close_channel), so nothing
+        # below can rely on the message or channel still existing afterward.
         for item in self.children:
             item.disabled = True
-        await interaction.message.edit(view=self)
-        await interaction.followup.send("❌ Denied.", ephemeral=True)
+        try:
+            await interaction.message.edit(view=self)
+        except discord.HTTPException:
+            pass
+        cog = interaction.client.cogs["Filecab"]
+        await cog.filing.deny(interaction.guild, self.filing_id)
+        try:
+            await interaction.followup.send("❌ Denied.", ephemeral=True)
+        except discord.HTTPException:
+            pass
 
     @discord.ui.button(label="✏️ Edit Field", style=discord.ButtonStyle.blurple, custom_id="filecab:editfield:_")
     async def edit_field(self, interaction: discord.Interaction, button: discord.ui.Button):

@@ -47,7 +47,7 @@ Discord-native DOJ document filing. Members pick a document type from a dropdown
 - Templates can mark fields conditional (`depends_on`/`skip_value`) so redundant follow-up questions get skipped automatically and auto-filled instead of asked
 - Anyone with access to a filing's channel — the filer included — can fix a wrong answer via Edit Field; if it had already been signed off on, editing warns first and marks the signature stale until the signer re-signs
 - Staff can add an extra person to a filing's channel on the fly, and per-template filing access gates restrict which roles can file a given document type in the first place; staff always bypass both via `filecab file`
-- Optional log forum: once a filing is made public, its channel's full history gets archived to a forum post (document link, then transcript — as a `.txt` file if it's too long for one message), tagged by category, locked, and the now-redundant channel is deleted — same mechanism as the `forms` cog's ticket-closing flow
+- Optional log forum: whether a filing is published or denied, its channel's full history gets archived to a forum post (document link — also DMed straight to the filer — or a denial note, then the transcript as a `.txt` file if it's too long for one message), tagged by category, locked, and the now-redundant channel is deleted — same mechanism as the `forms` cog's ticket-closing flow
 - Settings panel: change core config, reload/refresh templates, repost the panel, manage per-template access gates, and take down or permanently delete previously filed documents
 - Persistent views survive bot restarts, including a graceful fallback if a filing's template is deleted out from under it
 - Slash command support (`/filecab setup`, `/filecab settings`, `/filecab file`)

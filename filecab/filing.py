@@ -602,7 +602,9 @@ class FilingManager:
         return True
 
     async def deny(self, guild: discord.Guild, filing_id: str) -> bool:
-        """Deny a pending filing, notify the filer, and disable any outstanding signer DMs."""
+        """Deny a pending filing, notify the filer, disable any outstanding signer DMs,
+        and archive+close the review channel — a denied filing never goes through
+        make_public, so this is its only path to getting cleaned up at all."""
         guild_conf = self.config.guild(guild)
         published = await guild_conf.published_documents()
         record = published.get(filing_id)
@@ -635,6 +637,8 @@ class FilingManager:
                 await msg.edit(content=msg.content + "\n\n❌ This filing was denied by staff — no action needed.", view=None)
             except discord.HTTPException:
                 pass
+
+        await self._close_channel(guild, filing_id, f"❌ **{record['title']}** — denied")
         return True
 
     async def make_public(self, guild: discord.Guild, filing_id: str) -> str | None:
@@ -671,18 +675,13 @@ class FilingManager:
             # Give the site's GitHub Action time to rebuild before announcing the live
             # link and archiving — don't block the caller (staff already got their own
             # confirmation) waiting on this.
-            self.bot.loop.create_task(self._archive_and_close(guild, filing_id, url))
+            self.bot.loop.create_task(self._announce_and_close(guild, filing_id, url))
         return url
 
-    async def _archive_and_close(self, guild: discord.Guild, filing_id: str, url: str | None) -> None:
-        """After the publish-delay window, announce the live link, archive the filing's
-        full channel history to the configured log forum (locked, tagged by category),
-        then delete the now-redundant private channel.
-
-        Archiving is entirely optional (`document_log_forum` unset by default) and only
-        deletes the channel if the archive actually succeeds — if it's not configured,
-        or the archive step raises partway through, the channel is left exactly as it
-        would have been before this feature existed rather than risking losing it.
+    async def _announce_and_close(self, guild: discord.Guild, filing_id: str, url: str | None) -> None:
+        """After the publish-delay window: announce the live link in the channel, DM
+        it to the filer directly too (so they have it even if they never revisit the
+        channel), then hand off to `_close_channel` for the actual archive+delete.
         """
         await asyncio.sleep(PUBLISH_ANNOUNCE_DELAY_SECONDS)
 
@@ -700,6 +699,37 @@ class FilingManager:
                 await channel.send(f"📄 **{record['title']}** is now public — {url}")
             except discord.HTTPException:
                 pass
+            filer = self.bot.get_user(record["user_id"])
+            if filer:
+                try:
+                    await filer.send(f"📄 Your **{record['title']}** filing is now public — {url}")
+                except discord.Forbidden:
+                    pass
+
+        summary_line = f"📄 **{record['title']}**\n{url}" if url else f"📄 **{record['title']}** (not published live)"
+        await self._close_channel(guild, filing_id, summary_line)
+
+    async def _close_channel(self, guild: discord.Guild, filing_id: str, summary_line: str) -> None:
+        """Archive a filing's review channel to the configured log forum under
+        `summary_line` (a document link for a published filing, a plain denial note
+        otherwise), then delete the channel — the one path both `make_public` (via
+        `_announce_and_close`) and `deny` funnel through, so a filing gets the same
+        cleanup regardless of which way it ends.
+
+        Archiving is entirely optional (`document_log_forum` unset by default) and
+        only deletes the channel if the archive actually succeeds — if it's not
+        configured, or the archive step raises partway through, the channel is left
+        exactly as it would have been before this feature existed rather than
+        risking losing it.
+        """
+        guild_conf = self.config.guild(guild)
+        published = await guild_conf.published_documents()
+        record = published.get(filing_id)
+        if not record:
+            return
+        channel = await self._get_channel(record.get("channel_id"))
+        if channel is None:
+            return
 
         log_forum_id = await guild_conf.document_log_forum()
         log_forum = guild.get_channel(log_forum_id) if log_forum_id else None
@@ -707,23 +737,26 @@ class FilingManager:
             return
 
         try:
-            await self._archive_to_log(log_forum, record, channel, url)
+            await self._archive_to_log(log_forum, record, channel, summary_line)
         except discord.HTTPException:
             return  # best-effort archival; don't delete a channel we failed to archive
 
+        published[filing_id] = record  # _archive_to_log set record["archived_thread_id"]
+        await guild_conf.published_documents.set(published)
+
         try:
-            await channel.delete(reason=f"Filecab: filing {filing_id} published and archived")
+            await channel.delete(reason=f"Filecab: filing {filing_id} closed")
         except discord.HTTPException:
             pass
 
     async def _archive_to_log(
-        self, log_forum: discord.ForumChannel, record: dict, channel: discord.TextChannel, url: str | None
+        self, log_forum: discord.ForumChannel, record: dict, channel: discord.TextChannel, summary_line: str
     ) -> None:
         """Post a filing's full channel history to the log forum, tagged by category,
-        then lock and archive that forum post. Message 1 is the published document's
-        link; message 2 is the transcript, as text if it fits or a .txt attachment if
-        not (a real channel's history can exceed Discord's 2000-char message limit).
-        Any attachments posted in the channel are downloaded and re-uploaded, since
+        then lock and archive that forum post. Message 1 is `summary_line`; message 2
+        is the transcript, as text if it fits or a .txt attachment if not (a real
+        channel's history can exceed Discord's 2000-char message limit). Any
+        attachments posted in the channel are downloaded and re-uploaded, since
         they'd otherwise be lost when the channel is deleted.
         """
         messages = [m async for m in channel.history(limit=None, oldest_first=True)]
@@ -744,10 +777,9 @@ class FilingManager:
             if tag:
                 tags = [tag]
 
-        link_body = f"📄 **{record['title']}**\n{url}" if url else f"📄 **{record['title']}** (not published live)"
         thread, _first_msg = await log_forum.create_thread(
             name=f"{record['title']} — {record['filing_id']}"[:100],
-            content=link_body,
+            content=summary_line,
             applied_tags=tags,
             allowed_mentions=discord.AllowedMentions.none(),
         )
