@@ -159,10 +159,13 @@ class Filecab(commands.Cog):
         Step 2 — Review channel: a text channel where each filing gets its own
                   private thread with Approve/Deny buttons. The filer is added to
                   their own thread so staff can ask follow-up questions directly —
-                  they can't see any other filing's thread. The bot needs the
-                  **Create Private Threads** permission there, and staff need
-                  **Manage Threads** on that channel to see every filing's thread
-                  without being added to each one individually.
+                  they can't see any other filing's thread. The bot needs
+                  **Create Private Threads**, **Send Messages in Threads**, and
+                  **Manage Messages** on that channel (Manage Messages is what
+                  Discord requires to add the filer to their thread — without
+                  it, filings fail after the thread is created); staff need
+                  **Manage Threads** there to see every filing's thread without
+                  being added to each one individually.
         Step 3 — Approval role: who (besides admins) can approve/deny filings and
                   make them public.
         Step 4 — Site repository: the GitHub repo (`owner/repo`) that serves as

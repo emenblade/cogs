@@ -92,8 +92,10 @@ class WizardStep1View(_WizardStepView):
             description=(
                 "Select the **review channel** — a text channel where each filing gets its "
                 "own private thread with Approve/Deny buttons, and the filer is added to "
-                "their own thread (but no others). The bot needs **Create Private Threads** "
-                "there; staff need **Manage Threads** to see every filing's thread."
+                "their own thread (but no others). The bot needs **Create Private Threads**, "
+                "**Send Messages in Threads**, and **Manage Messages** there (that last one "
+                "is required to add the filer to their thread); staff need **Manage Threads** "
+                "to see every filing's thread."
             ),
             color=discord.Color.blurple(),
         )

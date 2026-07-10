@@ -181,11 +181,21 @@ send anything extra, no error or placeholder.
    thread is created in the configured review channel with (optionally) the
    preview image, then the Q&A transcript and `FilingReviewView` (one
    "➕ Assign X" button per handoff role, plus Approve/Deny), and the filer
-   is added to it directly (`Thread.add_user`, `invitable=False` so only
-   staff with Manage Messages can add anyone else) — they can see and post
-   in their own filing's thread, like a support ticket, but have no access
-   to any other filing's thread; that isolation is Discord's own
-   private-thread membership model, not something the bot enforces.
+   is added to it directly (`Thread.add_user`, `invitable=False` so nobody
+   but the bot/staff can add anyone else) — they can see and post in their
+   own filing's thread, like a support ticket, but have no access to any
+   other filing's thread; that isolation is Discord's own private-thread
+   membership model, not something the bot enforces. **The bot's own role
+   needs Manage Messages on the review channel** — Discord requires it to
+   add a member to a non-invitable private thread (`Thread.add_user`'s own
+   docs say so), and without it `add_user` raises `Forbidden` (error 50001)
+   after the thread's already been created. `_post_review` treats any
+   failure past that point as recoverable, not fatal: it deletes the
+   half-created thread, saves the filing's record regardless (so the
+   answers are never lost even though `thread_id`/`message_id` stay unset),
+   posts a plain fallback message with the transcript to the review channel
+   itself (needs only Send Messages, not thread permissions), and tells the
+   filer something went wrong rather than leaving them thinking it worked.
    Status: `pending`. Nothing is rendered yet.
 2. **Assign** (staff click "➕ Assign Witness" etc.) → permission-checked, then
    an ephemeral `UserSelect` — no @-mention typing, since DMs can't resolve

@@ -166,6 +166,15 @@ class FilingManager:
         like a support ticket) but have no visibility into any other filing's thread,
         since that isolation comes from Discord's private-thread membership rather
         than anything the bot has to enforce itself.
+
+        By the time this runs, the filer has already been told (in `handle_reply`)
+        that their filing was submitted — so if anything here fails partway through
+        (most likely a missing Manage Messages permission on the review channel,
+        which Discord requires to add a member to a non-invitable private thread),
+        the answers must not just vanish. The record is always saved to config
+        (with thread_id/message_id left unset on failure) and both the filer and
+        the review channel get told something went wrong, rather than the filing
+        silently disappearing with no trace anywhere.
         """
         from .views import FilingReviewView
 
@@ -188,35 +197,62 @@ class FilingManager:
         content, overflowed = _truncate_for_discord(transcript)
         view = FilingReviewView(self.config, self.bot, filing_id, spec, record["signers"])
 
-        thread = await channel.create_thread(
-            name=f"{spec['title']} — {member.name}"[:100],
-            invitable=False,
-            reason=f"Filecab review thread for {filing_id}",
-        )
-        await thread.add_user(member)
-
-        image_path = self.templates.preview_image_path(record["template_id"])
-        if image_path is not None:
-            await thread.send(
-                "🖼️ Here's an example of what this document looks like.",
-                file=discord.File(str(image_path)),
+        thread = None
+        try:
+            thread = await channel.create_thread(
+                name=f"{spec['title']} — {member.name}"[:100],
+                invitable=False,
+                reason=f"Filecab review thread for {filing_id}",
             )
+            await thread.add_user(member)
 
-        # Transcript embeds raw DM answers — suppress @everyone/@here/role/other-user
-        # mentions someone could try to sneak in via a free-text answer. The filer's
-        # own "Filed by:" mention is bot-constructed, not user free text, so it's
-        # explicitly allowed through.
-        first_msg = await thread.send(
-            content=content,
-            view=view,
-            allowed_mentions=discord.AllowedMentions(everyone=False, users=[member], roles=False),
-        )
-        if overflowed:
-            fp = io.BytesIO(transcript.encode("utf-8"))
-            await thread.send(file=discord.File(fp, filename=f"{filing_id}.txt"))
+            image_path = self.templates.preview_image_path(record["template_id"])
+            if image_path is not None:
+                await thread.send(
+                    "🖼️ Here's an example of what this document looks like.",
+                    file=discord.File(str(image_path)),
+                )
 
-        record["thread_id"] = thread.id
-        record["message_id"] = first_msg.id
+            # Transcript embeds raw DM answers — suppress @everyone/@here/role/other-user
+            # mentions someone could try to sneak in via a free-text answer. The filer's
+            # own "Filed by:" mention is bot-constructed, not user free text, so it's
+            # explicitly allowed through.
+            first_msg = await thread.send(
+                content=content,
+                view=view,
+                allowed_mentions=discord.AllowedMentions(everyone=False, users=[member], roles=False),
+            )
+            if overflowed:
+                fp = io.BytesIO(transcript.encode("utf-8"))
+                await thread.send(file=discord.File(fp, filename=f"{filing_id}.txt"))
+
+            record["thread_id"] = thread.id
+            record["message_id"] = first_msg.id
+        except (discord.Forbidden, discord.HTTPException) as exc:
+            if thread is not None:
+                try:
+                    await thread.delete()
+                except discord.HTTPException:
+                    pass
+            try:
+                await channel.send(
+                    f"⚠️ Couldn't set up a private review thread for **{spec['title']}** filed "
+                    f"by {member.mention} (`{filing_id}`) — check the bot's permissions on this "
+                    f"channel (it needs **Manage Messages** to add the filer to a private "
+                    f"thread). Nothing was lost — the filer's answers are below and saved on "
+                    f"file; a developer or admin needs to look into this.\n\n{content}",
+                    allowed_mentions=discord.AllowedMentions(everyone=False, users=[member], roles=False),
+                )
+            except discord.HTTPException:
+                pass
+            try:
+                await member.send(
+                    "⚠️ Something went wrong setting up your filing for staff review — your "
+                    "answers weren't lost and staff have been notified. Sorry for the trouble!"
+                )
+            except discord.Forbidden:
+                pass
+
         published = await guild_conf.published_documents()
         published[filing_id] = record
         await guild_conf.published_documents.set(published)
