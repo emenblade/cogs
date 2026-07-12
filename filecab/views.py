@@ -469,29 +469,34 @@ async def _finish_approval(
     )
 
 
-def _assign_button_appearance(label: str, state: dict) -> tuple[discord.ButtonStyle, str, bool]:
-    status = state.get("status", "unassigned")
+def _sign_button_appearance(label: str, state: dict) -> tuple[discord.ButtonStyle, str, bool]:
+    status = state.get("status", "open")
     if status == "signed":
         return discord.ButtonStyle.green, f"✅ {label}: signed", True
-    if status == "pending":
-        return discord.ButtonStyle.grey, f"⏳ {label}: awaiting reply", True
-    if status == "declined":
-        return discord.ButtonStyle.red, f"🔁 Reassign {label}", False
     if status == "stale":
         return discord.ButtonStyle.red, f"🔁 Re-sign Needed: {label}", False
-    return discord.ButtonStyle.blurple, f"➕ Assign {label}", False
+    return discord.ButtonStyle.blurple, f"✍️ Sign as {label}", False
 
 
-class _AssignButton(discord.ui.Button):
-    """One button per handoff signer role on the review-channel post."""
+class _SignButton(discord.ui.Button):
+    """One button per handoff signer role on the review-channel post.
+
+    Open to anyone with access to the channel — not staff-gated — same as
+    Edit Field. There's no separate assign-a-person-then-DM-them step: staff
+    add the actual signer to the channel via Add Person if they aren't
+    already in there (the filer always is), and that person clicks this
+    directly, right where the document already is, same pattern as the
+    judge fields collected on Approve. This sidesteps DMs (and their privacy
+    settings) for signing entirely, rather than working around them.
+    """
 
     def __init__(self, filing_id: str, role: str, label: str, state: dict):
-        style, text, disabled = _assign_button_appearance(label, state)
+        style, text, disabled = _sign_button_appearance(label, state)
         super().__init__(
             label=text,
             style=style,
             disabled=disabled,
-            custom_id=f"filecab:assign:{filing_id}:{role}",
+            custom_id=f"filecab:signas:{filing_id}:{role}",
         )
         self.filing_id = filing_id
         self.role = role
@@ -499,62 +504,47 @@ class _AssignButton(discord.ui.Button):
 
     async def callback(self, interaction: discord.Interaction):
         cog = interaction.client.cogs["Filecab"]
-        role_id = await cog.config.guild(interaction.guild).approval_role()
-        if not await can_review(interaction, role_id):
+        published = await cog.config.guild(interaction.guild).published_documents()
+        record = published.get(self.filing_id)
+        if not record or record.get("status") != "pending":
             await interaction.response.send_message(
-                "⚠️ You don't have permission to assign signers.", ephemeral=True
+                "⚠️ This filing isn't open for signing anymore.", ephemeral=True
             )
             return
-        view = _AssignUserSelectView(self.filing_id, self.role, self.signer_label)
-        await interaction.response.send_message(
-            f"Select the **{self.signer_label}** for this filing:", view=view, ephemeral=True
+        spec = cog.templates.get(record["template_id"])
+        fields = cog.templates.signer_fields(spec, self.role) if spec else []
+        if not fields:
+            await interaction.response.send_message(
+                "⚠️ This filing's template is no longer available.", ephemeral=True
+            )
+            return
+
+        async def _on_submit(modal_interaction: discord.Interaction, answers: dict[str, str]):
+            await modal_interaction.response.defer(ephemeral=True)
+            ok = await cog.filing.sign(
+                modal_interaction.guild, self.filing_id, self.role, modal_interaction.user.id, answers
+            )
+            if not ok:
+                await modal_interaction.followup.send(
+                    "⚠️ Couldn't record that signature — this filing may have changed.", ephemeral=True
+                )
+                return
+            await modal_interaction.followup.send(
+                f"✅ Signed as **{self.signer_label}** — thanks!", ephemeral=True
+            )
+
+        await interaction.response.send_modal(
+            SignatureFieldsModal(f"Sign as {self.signer_label}"[:45], fields, _on_submit)
         )
-        view.message = await interaction.original_response()
-
-
-class _AssignUserSelectView(_ExpiringView):
-    """Ephemeral one-shot UserSelect shown when staff click an Assign button."""
-
-    def __init__(self, filing_id: str, role: str, label: str):
-        super().__init__(timeout=120)
-        self.add_item(self._Select(filing_id, role, label))
-
-    class _Select(discord.ui.UserSelect):
-        def __init__(self, filing_id: str, role: str, label: str):
-            super().__init__(placeholder=f"Select the {label}…")
-            self.filing_id = filing_id
-            self.role = role
-
-        async def callback(self, interaction: discord.Interaction):
-            member = self.values[0]
-            await interaction.response.defer(ephemeral=True)
-            cog = interaction.client.cogs["Filecab"]
-            result = await cog.filing.assign_signer(interaction.guild, self.filing_id, self.role, member)
-            if result == "dm":
-                await interaction.followup.send(
-                    f"✅ Sent the signing request to {member.mention} via DM.", ephemeral=True
-                )
-            elif result == "channel":
-                await interaction.followup.send(
-                    f"✅ Couldn't DM {member.mention} (they likely have DMs from server members "
-                    "off) — added them to this channel to sign here instead.",
-                    ephemeral=True,
-                )
-            else:
-                await interaction.followup.send(
-                    f"⚠️ Couldn't reach {member.mention} at all — DM failed and there's no review "
-                    "channel to fall back to.",
-                    ephemeral=True,
-                )
 
 
 class FilingReviewView(discord.ui.View):
-    """Review-channel view: one Assign button per handoff signer role, plus Approve/Deny.
+    """Review-channel view: one Sign button per handoff signer role, plus Approve/Deny.
 
     Approve is disabled until every handoff role has signed. `spec` can be
     None — the filing's template was deleted from the site repo since it was
     filed — in which case Approve is force-disabled (there's no schema left
-    to safely collect judge fields or render the document) and no Assign
+    to safely collect judge fields or render the document) and no Sign
     buttons are shown, but Deny still works, so a restart doesn't strand the
     filing with an entirely dead review post.
     """
@@ -582,8 +572,8 @@ class FilingReviewView(discord.ui.View):
         )
         for signer in TemplateManager.handoff_signers(spec):
             role = signer["role"]
-            state = signers_state.get(role, {"status": "unassigned"})
-            self.add_item(_AssignButton(filing_id, role, signer["label"], state))
+            state = signers_state.get(role, {"status": "open"})
+            self.add_item(_SignButton(filing_id, role, signer["label"], state))
 
     async def _can_review(self, interaction: discord.Interaction) -> bool:
         role_id = await self.config.guild(interaction.guild).approval_role()
@@ -800,75 +790,6 @@ class EditFieldModal(discord.ui.Modal):
             await interaction.followup.send(
                 "⚠️ Couldn't update — this filing may no longer be pending.", ephemeral=True
             )
-
-
-class SignerRequestView(discord.ui.View):
-    """Persistent Sign/Decline buttons DM'd to an assigned handoff signer."""
-
-    def __init__(self, filing_id: str, role: str, guild_id: int):
-        super().__init__(timeout=None)
-        self.filing_id = filing_id
-        self.role = role
-        self.guild_id = guild_id
-        self.children[0].custom_id = f"filecab:sign:{filing_id}:{role}"
-        self.children[1].custom_id = f"filecab:decline:{filing_id}:{role}"
-
-    @discord.ui.button(label="✅ Sign", style=discord.ButtonStyle.green, custom_id="filecab:sign:_:_")
-    async def sign(self, interaction: discord.Interaction, button: discord.ui.Button):
-        cog = interaction.client.cogs["Filecab"]
-        guild = cog.bot.get_guild(self.guild_id)
-        if guild is None:
-            await interaction.response.send_message(
-                "⚠️ Something went wrong finding the server this filing belongs to.", ephemeral=True
-            )
-            return
-        published = await cog.config.guild(guild).published_documents()
-        record = published.get(self.filing_id)
-        spec = cog.templates.get(record["template_id"]) if record else None
-        fields = cog.templates.signer_fields(spec, self.role) if spec else []
-        if not fields:
-            await interaction.response.send_message(
-                "⚠️ This filing is no longer available.", ephemeral=True
-            )
-            return
-
-        origin_message = interaction.message
-
-        async def _on_submit(modal_interaction: discord.Interaction, answers: dict[str, str]):
-            await modal_interaction.response.defer(ephemeral=True)
-            ok = await cog.filing.sign(guild, self.filing_id, self.role, modal_interaction.user.id, answers)
-            if not ok:
-                await modal_interaction.followup.send(
-                    "⚠️ This request is no longer pending.", ephemeral=True
-                )
-                return
-            await origin_message.edit(
-                content=origin_message.content + "\n\n✅ You signed this document. Thank you!",
-                view=None,
-            )
-            await modal_interaction.followup.send("✅ Signed — thanks!", ephemeral=True)
-
-        await interaction.response.send_modal(SignatureFieldsModal("Sign Document", fields, _on_submit))
-
-    @discord.ui.button(label="❌ Decline", style=discord.ButtonStyle.red, custom_id="filecab:decline:_:_")
-    async def decline(self, interaction: discord.Interaction, button: discord.ui.Button):
-        cog = interaction.client.cogs["Filecab"]
-        guild = cog.bot.get_guild(self.guild_id)
-        if guild is None:
-            await interaction.response.send_message(
-                "⚠️ Something went wrong finding the server this filing belongs to.", ephemeral=True
-            )
-            return
-        await interaction.response.defer(ephemeral=True)
-        ok = await cog.filing.decline_signer(guild, self.filing_id, self.role, interaction.user.id)
-        if not ok:
-            await interaction.followup.send("⚠️ This request is no longer pending.", ephemeral=True)
-            return
-        await interaction.message.edit(
-            content=interaction.message.content + "\n\n❌ You declined to sign this document.",
-            view=None,
-        )
-        await interaction.followup.send("Declined. Staff have been notified.", ephemeral=True)
 
 
 class ApprovedDocumentView(discord.ui.View):

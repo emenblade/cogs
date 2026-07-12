@@ -69,7 +69,6 @@ class Filecab(commands.Cog):
             TemplateSelectView,
             FilingReviewView,
             ApprovedDocumentView,
-            SignerRequestView,
             build_template_options,
         )
 
@@ -102,16 +101,6 @@ class Filecab(commands.Cog):
                         ApprovedDocumentView(filing_id),
                         message_id=message_id,
                     )
-
-                for role, signer_state in record.get("signers", {}).items():
-                    if signer_state.get("status") != "pending":
-                        continue
-                    message_id = signer_state.get("dm_message_id") or signer_state.get("channel_message_id")
-                    if message_id:
-                        self.bot.add_view(
-                            SignerRequestView(filing_id, role, guild_id),
-                            message_id=message_id,
-                        )
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:

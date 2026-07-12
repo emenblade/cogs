@@ -32,10 +32,10 @@ once staff sign off.
 - `views.py` — all `discord.ui.View`/`Modal` classes: the setup wizard
   (including the site-repo step), the persistent document-type select panel,
   the staff `file` command's select, the persistent review view (dynamic
-  Assign buttons + Approve/Deny/Edit Field/Add Person), the persistent
-  signer-handoff DM view (Sign/Decline), the persistent post-approval
-  "Make Public" view, and the settings panel (including template access
-  gating, document takedown/delete, and the optional log forum).
+  Sign-as-X buttons + Approve/Deny/Edit Field/Add Person), the persistent
+  post-approval "Make Public" view, and the settings panel (including
+  template access gating, document takedown/delete, and the optional log
+  forum).
 
 ## UI conventions
 
@@ -43,28 +43,26 @@ All buttons across `views.py` follow one color/emoji scheme, so a new button
 should match rather than invent its own:
 
 - **Green** — confirm / positive / completed (`Confirm` in the setup wizard,
-  `✅ Approve`, `✅ Sign`, a signer's `✅ {label}: signed` state, `✅ Published`
-  once Make Public succeeds).
+  `✅ Approve`, a signer's `✅ {label}: signed` state, `✅ Published` once
+  Make Public succeeds).
 - **Red** — destructive / negative outcome, or a signer state that needs
-  re-engagement (`❌ Deny`, `❌ Decline`, `❌ Delete Permanently`,
-  `❌ Confirm Delete`, a declined signer's `🔁 Reassign {label}` state, a
+  re-engagement (`❌ Deny`, `❌ Delete Permanently`, `❌ Confirm Delete`, a
   stale signer's `🔁 Re-sign Needed: {label}` state).
 - **Blurple** — a primary, non-destructive action (`Set Site Repository`,
   `🔄 Reload Templates`, `🔄 Refresh Templates from Repo`, `Change Site Repo`,
   `Repost Panel`, `🌐 Make Public`, `✏️ Edit Field`, `👤 Add Person`, an
-  unassigned signer's `➕ Assign {label}` state).
+  open signer role's `✍️ Sign as {label}` state).
 - **Grey** — secondary / navigational / "opens another menu" (`Cancel`,
   `Skip for Now`, `Template Access`, `Manage Documents`, `📋 Log Forum`,
-  `Open to Everyone`, `🗑️ Take Down`, a pending signer's
-  `⏳ {label}: awaiting reply` state).
+  `Open to Everyone`, `🗑️ Take Down`).
 
 `Cancel` is always grey, never red — red is reserved for an action that
-actually denies/declines/deletes something, and using it for a plain abort
-would dilute that signal. Emoji are reserved for buttons that represent a
+actually denies/deletes something, and using it for a plain abort would
+dilute that signal. Emoji are reserved for buttons that represent a
 concrete document/filing action with a natural icon (approve, deny, sign,
-decline, publish, delete, take down, (re)assign) or that match an emoji
-their own result message already uses (`🔄` on the two template-refresh
-buttons, matching their own "🔄 Reloaded…"/"🔄 Fetched…" replies); generic
+publish, delete, take down, add person) or that match an emoji their own
+result message already uses (`🔄` on the two template-refresh buttons,
+matching their own "🔄 Reloaded…"/"🔄 Fetched…" replies); generic
 navigation/admin buttons (`Confirm`, `Cancel`, `Change Site Repo`, `Template
 Access`, `Manage Documents`, …) stay plain text.
 
@@ -127,16 +125,16 @@ and refresh.
   mechanics above). Other roles (`party_one`, `witness`, `counsel`, ...) have
   `requires_handoff: true` and their own `filled_by`-tagged field(s)
   (`TemplateManager.signer_fields`) — always `prompt: null`, collected from
-  whichever *Discord member staff assign* to that role, not the filer. See
-  "Filing lifecycle" below for the assign → DM sign/decline flow. **Known
-  gap**: `divorce.json`'s `signing_party` role reuses a field
+  whichever *Discord member actually clicks "✍️ Sign as {label}"* on the
+  review post, not the filer. See "Filing lifecycle" below for the Sign
+  flow. **Known gap**: `divorce.json`'s `signing_party` role reuses a field
   (`signing_party_name`) that also has a real prompt asked of the filer
   during the original Q&A — so the filer's answer gets silently overwritten
-  once the assigned signer signs. Every other template seen so far avoids
+  once someone signs that role. Every other template seen so far avoids
   this by giving the handoff field a distinct `<role>_signature` key with
   `prompt: null`. Also, `divorce.json`'s `counsel` role is only actually
   applicable if `counsel_name` isn't "None" — there's currently no schema way
-  to mark a signer role conditional/not-applicable, so assigning nobody to an
+  to mark a signer role conditional/not-applicable, so nobody signing an
   inapplicable role would block Approve forever. Both need a template-side
   fix (or a bot-side "N/A" override button, not yet built) before Divorce's
   handoff flow is fully correct — flagged to the user rather than guessed
@@ -188,80 +186,75 @@ handoff signer role has signed.
 If a template has an optional preview image (`templates/<template_id>.png`
 — see `docs/SITE_REPO_CONTRACT.md`), `TemplateManager.preview_image_path`
 is checked at every point someone's about to see the document for the first
-time — starting the DM Q&A, being asked to sign, and the review channel's
-opening post — and the image is sent alongside a short explanatory message
-if it's there. Purely cosmetic: if there's no image, none of those checks
-send anything extra, no error or placeholder.
+time — starting the DM Q&A and the review channel's opening post — and the
+image is sent alongside a short explanatory message if it's there. Purely
+cosmetic: if there's no image, none of those checks send anything extra, no
+error or placeholder.
 
 1. **DM Q&A completes** → `"submission"` auto fields are filled with today's
    date → a `filing_id` (`<template_id>-<year>-<seq>`, from the global
    per-template-per-year counter in `filing_counters`) is minted → the
-   filing's `signers` map is seeded (one `{user_id: null, status:
-   "unassigned", dm_message_id: null}` entry per handoff role) → a **private
-   text channel** is created under the configured review category, with
-   (optionally) the preview image, then the Q&A transcript and
-   `FilingReviewView` (one "➕ Assign X" button per handoff role, plus
-   Approve/Deny). The channel is created with an explicit permission
-   overwrite granting the filer `view_channel`/`send_messages` on just that
-   one channel — the same mechanism the `forms` cog's ticket channels
-   already use, **not threads**. An earlier version of this used a private
-   thread with `Thread.add_user`, which turned out not to reliably grant
-   access no matter what permission the bot had (confirmed against a real
-   server, including a manual add attempt by the server owner) — threads
-   just don't behave like an independent per-member ACL the way a channel's
-   own permission overwrites do, so this now creates a real channel instead.
-   `_post_review` handles two distinct failure points, neither of which can
-   silently drop the filing (the citizen's already been told in
-   `handle_reply` that it was submitted, before this even runs): if
-   `category.create_text_channel()` itself fails (most likely the bot's
-   role missing **Manage Channels**/**Manage Roles** on the category —
-   needed to create a channel there with a custom overwrite at all), there's
-   no channel to fall back to, so it just tells the filer and saves the
-   record with `channel_id`/`message_id` left unset; if something fails
-   *after* the channel exists (posting the transcript, etc.), the channel
-   itself already has the right permissions for staff to see it, so the
-   fallback error message goes straight into it instead. Either way the
-   record is always saved regardless of the outcome. Status: `pending`.
-   Nothing is rendered yet.
-2. **Assign** (staff click "➕ Assign Witness" etc.) → permission-checked, then
-   an ephemeral `UserSelect` — no @-mention typing, since DMs can't resolve
-   mentions — picking a member calls `FilingManager.assign_signer`, which
-   tries to DM them (optionally) the preview image, then the transcript + a
-   persistent `SignerRequestView` (Sign/Decline). **DM can fail even for
-   someone who was DM'd successfully earlier in the same filing** — the
-   filer's own initial Q&A DM went out as a direct response to *their own*
-   interaction (picking a template from the panel), which gets a Discord
-   exception to the "allow DMs from server members" privacy setting; this
-   DM doesn't, since staff picked the signer, not the signer themselves. On
-   `discord.Forbidden`, `assign_signer` falls back to granting the signer
-   access to the filing's review channel (same mechanism as Add Person) and
-   posting the same `SignerRequestView` there instead — its Sign/Decline
-   buttons just edit whichever message they're attached to, so nothing
-   about them needed to change. Either way, sets that role's
-   `status: "pending"` and rebuilds the review message (button becomes a
-   disabled "⏳ waiting on @user"). Returns which path was used (`"dm"` /
-   `"channel"` / `None` if both failed, e.g. no review channel to fall back
-   to either) so staff get an accurate confirmation message rather than a
-   flat success/failure.
-3. **Sign** → a modal (reusing the same pattern as judge sign-off) collects
-   that role's field(s); `FilingManager.sign` merges the answer into the
-   filing and sets `status: "signed"` — once every handoff role reads
-   `signed`, Approve unlocks. **Decline** → `status: "declined"`, the review
-   message shows "🔁 Reassign X" so staff can pick someone else; the filing
-   stays open rather than dying.
-4. **Approve** → if the template has approval-time judge fields, a modal
+   filing's `signers` map is seeded (one `{status: "open", signed_by_id:
+   null}` entry per handoff role) → a **private text channel** is created
+   under the configured review category, with (optionally) the preview
+   image, then the Q&A transcript and `FilingReviewView` (one "✍️ Sign as X"
+   button per handoff role, plus Approve/Deny/Edit Field/Add Person). The
+   channel is created with an explicit permission overwrite granting the
+   filer `view_channel`/`send_messages` on just that one channel — the same
+   mechanism the `forms` cog's ticket channels already use, **not threads**.
+   An earlier version of this used a private thread with `Thread.add_user`,
+   which turned out not to reliably grant access no matter what permission
+   the bot had (confirmed against a real server, including a manual add
+   attempt by the server owner) — threads just don't behave like an
+   independent per-member ACL the way a channel's own permission overwrites
+   do, so this now creates a real channel instead. `_post_review` handles
+   two distinct failure points, neither of which can silently drop the
+   filing (the citizen's already been told in `handle_reply` that it was
+   submitted, before this even runs): if `category.create_text_channel()`
+   itself fails (most likely the bot's role missing **Manage
+   Channels**/**Manage Roles** on the category — needed to create a channel
+   there with a custom overwrite at all), there's no channel to fall back
+   to, so it just tells the filer and saves the record with
+   `channel_id`/`message_id` left unset; if something fails *after* the
+   channel exists (posting the transcript, etc.), the channel itself already
+   has the right permissions for staff to see it, so the fallback error
+   message goes straight into it instead. Either way the record is always
+   saved regardless of the outcome. Status: `pending`. Nothing is rendered
+   yet.
+2. **Sign** (whoever clicks "✍️ Sign as Witness" etc., directly on the
+   review post — deliberately *not* staff-gated, same as Edit Field) → a
+   modal (`SignatureFieldsModal`, the same class the judge fields on Approve
+   use) collects that role's field(s) right there; `FilingManager.sign`
+   merges the answers into the filing and sets `status: "signed"` — once
+   every handoff role reads `signed`, Approve unlocks. There's no separate
+   assign-a-specific-person-then-DM-them step: access to the channel *is*
+   the gate — the filer already has it, staff already have it, and Add
+   Person grants it to anyone else who needs to sign a role the filer or
+   staff can't (a witness, counsel, a second party). This exists specifically
+   to avoid a DM-based flow entirely, not just work around it: a DM sent to
+   a signer picked by staff is a cold, unsolicited DM with no interaction
+   context, so Discord's "allow DMs from server members" privacy check
+   applies in full — even to someone who received an *earlier* DM in the
+   very same filing (the filer's own initial Q&A DM went out as a direct
+   response to *their own* interaction picking a template from the panel,
+   which gets an exception to that same setting a cold DM doesn't). Signing
+   in-channel via a button click sidesteps the whole privacy check, the same
+   way every other interaction-triggered action in this cog does.
+3. **Approve** → if the template has approval-time judge fields, a modal
    collects them; `"approval"` auto fields are filled with today's date;
    the full answer set (applicant + signer + judge) is rendered and both
    `documents/<template_id>/<filing_id>.html` and a sidecar `.json` are saved
    locally (`TemplateManager.save_document`/`save_sidecar`). The channel's
    view is swapped to `ApprovedDocumentView` (a persistent "🌐 Make Public"
    button). Status: `approved` — on file, not public yet.
-5. **Deny** → notifies the filer and disables any signer DM requests still
-   awaiting a reply, so nobody can sign a dead filing. Status: `denied`.
-   Also archives and closes the review channel — see "Archiving & channel
-   cleanup" below; a denied filing has no other path to Make Public, so
-   this is the only cleanup it ever gets.
-6. **Make Public** (separate, whenever staff are ready) → calls
+4. **Deny** → notifies the filer. Status: `denied`. Any Sign buttons on the
+   review post are already disabled along with the rest of the view before
+   this runs (`views.FilingReviewView.deny` edits the message first, since
+   `FilingManager.deny` may delete the channel it's in). Also archives and
+   closes the review channel — see "Archiving & channel cleanup" below; a
+   denied filing has no other path to Make Public, so this is the only
+   cleanup it ever gets.
+5. **Make Public** (separate, whenever staff are ready) → calls
    `DocumentPublisher.publish()` (stub) and announces in the document
    channel; on success the button relabels to a disabled, green
    "✅ Published" (matching the "completed" color used elsewhere) and stays
@@ -269,11 +262,11 @@ send anything extra, no error or placeholder.
    doesn't need re-registration after a restart. Status: `published`. Also
    kicks off archiving the review channel — see "Archiving & channel
    cleanup" below.
-7. **Take Down** (settings panel → Manage Documents → a filing → 🗑️ Take
+6. **Take Down** (settings panel → Manage Documents → a filing → 🗑️ Take
    Down) → deletes the local files, calls `unpublish()` if it was live.
    Status: `removed`. The record itself is kept (title, answers, audit
    trail) — only the rendered/live copies are gone.
-8. **Delete Permanently** (settings panel → Manage Documents → a filing →
+7. **Delete Permanently** (settings panel → Manage Documents → a filing →
    ❌ Delete Permanently → ❌ Confirm Delete) → same cleanup as Take Down if the
    filing was still `approved`/`published`, then erases the guild config
    record entirely (`FilingManager.purge`). Irreversible; gated behind an
@@ -293,30 +286,32 @@ it to that filing's `discussion` list in config — a durable copy of the
 conversation that outlives the channel itself if it's later deleted.
 
 While a filing is `pending`, `FilingReviewView` also carries two buttons
-beyond Approve/Deny/Assign:
+beyond Approve/Deny/Sign:
 
 - **✏️ Edit Field** (`FilingManager.edit_field`) — deliberately *not*
-  staff-gated, unlike every other button on this view; anyone with access to
-  the channel (the filer included) can fix a wrong answer. Only fields with
+  staff-gated, unlike Approve/Deny/Add Person; anyone with access to the
+  channel (the filer included) can fix a wrong answer. Only fields with
   `filled_by: "applicant"` are offered — judge/signer fields already have
-  their own consent-gated flows (the approval modal, the sign-off DM), and
+  their own consent-gated flows (the approval modal, the Sign button), and
   a generic edit button reaching into those would undermine them. If any
   handoff signer has already signed, picking a field shows a warning first
   ("editing this will invalidate their signature") before the modal opens;
   confirming resets every currently-`signed` signer to a new `stale` status
-  (Approve stays locked the same way it does for `declined` — `approve()`
-  already requires every signer to read exactly `signed`) and posts a
-  `~~old~~ → **new**` notice in the channel. Reuses the *existing*
-  Assign/Sign machinery to get a fresh signature rather than inventing a
-  parallel one: `_assign_button_appearance` just needed one more branch
-  (`stale` → red `🔁 Re-sign Needed: {label}`, enabled), and
-  `assign_signer`/`sign` don't care what the signer's prior status was.
+  (Approve stays locked the same way — `approve()` already requires every
+  signer to read exactly `signed`) and posts a `~~old~~ → **new**` notice in
+  the channel. Reuses the *existing* Sign machinery to get a fresh signature
+  rather than inventing a parallel one: `_sign_button_appearance` just
+  needed one more branch (`stale` → red `🔁 Re-sign Needed: {label}`,
+  enabled), and `sign()` already treats `open` and `stale` the same way —
+  both are just "not yet signed."
 - **👤 Add Person** (`FilingManager.add_person_to_channel`) — staff-gated,
-  unlike Edit Field. Grants an extra Discord member `view_channel`/
+  unlike Edit Field or Sign. Grants an extra Discord member `view_channel`/
   `send_messages`/`read_message_history` on that one channel via a plain
   `channel.set_permissions` overwrite — the same mechanism the filer
   themselves was added with in step 1, not tracked anywhere in config since
-  Discord persists the overwrite on its own.
+  Discord persists the overwrite on its own. This is how staff bring in
+  whoever actually needs to click a "✍️ Sign as X" button but isn't the
+  filer or staff themselves — a witness, counsel, a second party.
 
 ## Archiving & channel cleanup
 
@@ -426,12 +421,13 @@ separately and reported back rather than aborting the whole wipe.
 Discord buttons/selects stop working after a process restart unless the bot
 re-registers a matching view (same custom IDs) against the still-live
 message before anyone clicks them again — `discord.py` doesn't remember
-views across restarts on its own. Exactly four views in this cog are
+views across restarts on its own. Exactly three views in this cog are
 long-lived enough to need that: `TemplateSelectView` (the document panel),
-`FilingReviewView` (review-channel post), `SignerRequestView` (DM'd to a
-handoff signer), and `ApprovedDocumentView` (post-approval "Make Public").
-Everything else — the setup wizard, the settings panel and everything it
-opens (Template Access, Manage Documents, and their sub-views),
+`FilingReviewView` (review-channel post — its Sign-as-X buttons are children
+of this same view now, so they need no separate re-registration of their
+own), and `ApprovedDocumentView` (post-approval "Make Public"). Everything
+else — the setup wizard, the settings panel and everything it opens
+(Template Access, Manage Documents, and their sub-views),
 `StaffFileSelectView` — has a finite timeout and is expected to just go
 stale on restart like any short-lived admin flow; that's fine, nothing is
 lost since they don't hold state a citizen is waiting on.
@@ -450,16 +446,13 @@ worth re-registering:
   deleted from the site repo, `spec` comes back `None`; the view still
   re-registers, but Approve is force-disabled with an explanatory
   "⚠️ Template Missing" label (there's no schema left to safely collect
-  judge fields or rebuild Assign buttons) while Deny stays fully
-  functional, so staff can still clean up an orphaned filing instead of it
-  being permanently stuck with dead buttons.
+  judge fields or rebuild Sign buttons) while Deny stays fully functional,
+  so staff can still clean up an orphaned filing instead of it being
+  permanently stuck with dead buttons.
 - `approved` filings → `ApprovedDocumentView`.
 - `published` filings → nothing. Once Make Public succeeds the button is
   edited to a permanently disabled "✅ Published" — that state is baked
   into the message itself, so there's nothing left to re-register.
-- Any signer whose handoff is still `status: "pending"` → `SignerRequestView`
-  on their DM, regardless of the parent filing's own status (a pending
-  signer only ever exists while the filing itself is still `pending`).
 
 ## Publishing
 
@@ -487,18 +480,16 @@ that push — filecab doesn't maintain any index itself.
   signers, discussion, approved_by?, signed_date?, signed_by?, html_path?,
   json_path?, published_url?, archived_thread_id?}`, used for
   persistent-view re-registration and the takedown command). `signers` is
-  itself a dict of `role` → `{user_id, status, dm_message_id, channel_message_id}`
-  (`status` ∈ `unassigned | pending | signed | declined | stale` — `stale`
-  means they signed, but `FilingManager.edit_field` changed an answer since,
-  so it no longer covers what they agreed to; treated identically to
-  `declined` everywhere except the button label). Exactly one of
-  `dm_message_id`/`channel_message_id` is set once a signer is `pending` —
-  whichever the `SignerRequestView` actually got posted to (DM by default,
-  the filing's review channel as a fallback if the DM was blocked — see
-  "Filing lifecycle" step 2) — both restart re-registration and `deny()`'s
-  "no action needed" edit check `dm_message_id` first, then
-  `channel_message_id`. One entry per handoff-required signer role.
-  `discussion` is a
+  itself a dict of `role` → `{status, signed_by_id}` (`status` ∈
+  `open | signed | stale` — `stale` means they signed, but
+  `FilingManager.edit_field` changed an answer since, so it no longer covers
+  what they agreed to; treated identically to `open` by `sign()` — both just
+  mean "not yet signed" — but shown differently on the button). `signed_by_id`
+  is the Discord user ID that actually clicked "✍️ Sign as {label}" and
+  submitted the modal, recorded for the audit trail only — nothing checks it
+  against a prior assignment, since there isn't one; access to the filing's
+  channel is the only gate (see "Filing lifecycle" step 2). One entry per
+  handoff-required signer role. `discussion` is a
   list of `{author_id, author_label, content, at}`, one entry per human
   message posted in the filing's private review channel. `template_access`
   (dict of `template_id` → `[role_id, ...]`; a template missing from this
