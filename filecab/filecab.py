@@ -104,11 +104,13 @@ class Filecab(commands.Cog):
                     )
 
                 for role, signer_state in record.get("signers", {}).items():
-                    dm_message_id = signer_state.get("dm_message_id")
-                    if signer_state.get("status") == "pending" and dm_message_id:
+                    if signer_state.get("status") != "pending":
+                        continue
+                    message_id = signer_state.get("dm_message_id") or signer_state.get("channel_message_id")
+                    if message_id:
                         self.bot.add_view(
                             SignerRequestView(filing_id, role, guild_id),
-                            message_id=dm_message_id,
+                            message_id=message_id,
                         )
 
     @commands.Cog.listener()

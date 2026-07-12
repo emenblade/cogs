@@ -225,11 +225,24 @@ send anything extra, no error or placeholder.
    Nothing is rendered yet.
 2. **Assign** (staff click "➕ Assign Witness" etc.) → permission-checked, then
    an ephemeral `UserSelect` — no @-mention typing, since DMs can't resolve
-   mentions — picking a member calls `FilingManager.assign_signer`, which DMs
-   them (optionally) the preview image, then the transcript + a persistent
-   `SignerRequestView` (Sign/Decline), sets that role's `status: "pending"`,
-   and rebuilds the review message (button becomes a disabled "⏳ waiting on
-   @user").
+   mentions — picking a member calls `FilingManager.assign_signer`, which
+   tries to DM them (optionally) the preview image, then the transcript + a
+   persistent `SignerRequestView` (Sign/Decline). **DM can fail even for
+   someone who was DM'd successfully earlier in the same filing** — the
+   filer's own initial Q&A DM went out as a direct response to *their own*
+   interaction (picking a template from the panel), which gets a Discord
+   exception to the "allow DMs from server members" privacy setting; this
+   DM doesn't, since staff picked the signer, not the signer themselves. On
+   `discord.Forbidden`, `assign_signer` falls back to granting the signer
+   access to the filing's review channel (same mechanism as Add Person) and
+   posting the same `SignerRequestView` there instead — its Sign/Decline
+   buttons just edit whichever message they're attached to, so nothing
+   about them needed to change. Either way, sets that role's
+   `status: "pending"` and rebuilds the review message (button becomes a
+   disabled "⏳ waiting on @user"). Returns which path was used (`"dm"` /
+   `"channel"` / `None` if both failed, e.g. no review channel to fall back
+   to either) so staff get an accurate confirmation message rather than a
+   flat success/failure.
 3. **Sign** → a modal (reusing the same pattern as judge sign-off) collects
    that role's field(s); `FilingManager.sign` merges the answer into the
    filing and sets `status: "signed"` — once every handoff role reads
@@ -474,12 +487,18 @@ that push — filecab doesn't maintain any index itself.
   signers, discussion, approved_by?, signed_date?, signed_by?, html_path?,
   json_path?, published_url?, archived_thread_id?}`, used for
   persistent-view re-registration and the takedown command). `signers` is
-  itself a dict of `role` → `{user_id,
-  status, dm_message_id}` (`status` ∈ `unassigned | pending | signed |
-  declined | stale` — `stale` means they signed, but `FilingManager.
-  edit_field` changed an answer since, so it no longer covers what they
-  agreed to; treated identically to `declined` everywhere except the button
-  label), one entry per handoff-required signer role. `discussion` is a
+  itself a dict of `role` → `{user_id, status, dm_message_id, channel_message_id}`
+  (`status` ∈ `unassigned | pending | signed | declined | stale` — `stale`
+  means they signed, but `FilingManager.edit_field` changed an answer since,
+  so it no longer covers what they agreed to; treated identically to
+  `declined` everywhere except the button label). Exactly one of
+  `dm_message_id`/`channel_message_id` is set once a signer is `pending` —
+  whichever the `SignerRequestView` actually got posted to (DM by default,
+  the filing's review channel as a fallback if the DM was blocked — see
+  "Filing lifecycle" step 2) — both restart re-registration and `deny()`'s
+  "no action needed" edit check `dm_message_id` first, then
+  `channel_message_id`. One entry per handoff-required signer role.
+  `discussion` is a
   list of `{author_id, author_label, content, at}`, one entry per human
   message posted in the filing's private review channel. `template_access`
   (dict of `template_id` → `[role_id, ...]`; a template missing from this

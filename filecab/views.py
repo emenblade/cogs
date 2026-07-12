@@ -529,15 +529,21 @@ class _AssignUserSelectView(_ExpiringView):
             member = self.values[0]
             await interaction.response.defer(ephemeral=True)
             cog = interaction.client.cogs["Filecab"]
-            ok = await cog.filing.assign_signer(interaction.guild, self.filing_id, self.role, member)
-            if ok:
+            result = await cog.filing.assign_signer(interaction.guild, self.filing_id, self.role, member)
+            if result == "dm":
                 await interaction.followup.send(
-                    f"✅ Sent the signing request to {member.mention}.", ephemeral=True
+                    f"✅ Sent the signing request to {member.mention} via DM.", ephemeral=True
+                )
+            elif result == "channel":
+                await interaction.followup.send(
+                    f"✅ Couldn't DM {member.mention} (they likely have DMs from server members "
+                    "off) — added them to this channel to sign here instead.",
+                    ephemeral=True,
                 )
             else:
                 await interaction.followup.send(
-                    f"⚠️ Couldn't DM {member.mention} — ask them to enable DMs from server "
-                    "members and try again.",
+                    f"⚠️ Couldn't reach {member.mention} at all — DM failed and there's no review "
+                    "channel to fall back to.",
                     ephemeral=True,
                 )
 

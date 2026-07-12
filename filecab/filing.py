@@ -204,7 +204,10 @@ class FilingManager:
             return
 
         record["signers"] = {
-            s["role"]: {"user_id": None, "status": "unassigned", "dm_message_id": None}
+            s["role"]: {
+                "user_id": None, "status": "unassigned",
+                "dm_message_id": None, "channel_message_id": None,
+            }
             for s in self.templates.handoff_signers(spec)
         }
 
@@ -448,27 +451,48 @@ class FilingManager:
 
     async def assign_signer(
         self, guild: discord.Guild, filing_id: str, role: str, member: discord.abc.User
-    ) -> bool:
-        """Assign a Discord member to a handoff signer role and DM them a sign/decline request."""
+    ) -> str | None:
+        """Assign a Discord member to a handoff signer role and ask them to sign.
+
+        Tries a DM first (with the transcript, so they can review before
+        deciding). That can come back `discord.Forbidden` even for someone
+        who already received a DM from this same bot earlier in the same
+        filing (e.g. the filer got the initial Q&A over DM just fine) — DMs
+        sent as a direct response to a user's own interaction (like picking
+        a document type from the panel) get a Discord exception their
+        privacy settings don't otherwise allow, but this DM is unsolicited
+        (staff picked them via a select), so it doesn't qualify. When that
+        happens, falls back to granting them access to the filing's review
+        channel (same mechanism as Add Person) and posting the same
+        Sign/Decline request there instead, where the transcript is already
+        visible — `SignerRequestView`'s buttons don't care which channel
+        they're posted in, they just edit whatever message they're attached
+        to.
+
+        Returns `"dm"` or `"channel"` for which path was used, or `None` if
+        both failed (or the filing/role/template isn't in a valid state).
+        """
         from .views import SignerRequestView
 
         guild_conf = self.config.guild(guild)
         published = await guild_conf.published_documents()
         record = published.get(filing_id)
         if not record or record["status"] != "pending":
-            return False
+            return None
         spec = self.templates.get(record["template_id"])
         if not spec:
-            return False
+            return None
         signer_spec = next((s for s in spec.get("signers", []) if s["role"] == role), None)
         if not signer_spec or role not in record.get("signers", {}):
-            return False
+            return None
 
         filer = guild.get_member(record["user_id"])
         filer_label = f"{filer.mention} ({filer.name})" if filer else f"user ID {record['user_id']}"
         transcript = self._build_transcript(spec, filer_label, record["answers"])
         content, overflowed = _truncate_for_discord(transcript)
+        view = SignerRequestView(filing_id, role, guild.id)
 
+        dm_msg = None
         try:
             dm = await member.create_dm()
             image_path = self.templates.preview_image_path(record["template_id"])
@@ -480,7 +504,7 @@ class FilingManager:
             dm_msg = await dm.send(
                 f"You've been asked to sign as **{signer_spec['label']}** on a "
                 f"**{spec['title']}**, filed by {filer_label}.\n\n{content}",
-                view=SignerRequestView(filing_id, role, guild.id),
+                view=view,
                 allowed_mentions=discord.AllowedMentions(
                     everyone=False, users=[filer] if filer else [], roles=False
                 ),
@@ -489,13 +513,47 @@ class FilingManager:
                 fp = io.BytesIO(transcript.encode("utf-8"))
                 await dm.send(file=discord.File(fp, filename=f"{filing_id}.txt"))
         except discord.Forbidden:
-            return False
+            dm_msg = None
 
-        record["signers"][role] = {"user_id": member.id, "status": "pending", "dm_message_id": dm_msg.id}
+        signer_state = {
+            "user_id": member.id, "status": "pending",
+            "dm_message_id": None, "channel_message_id": None,
+        }
+        location: str | None
+
+        if dm_msg is not None:
+            signer_state["dm_message_id"] = dm_msg.id
+            location = "dm"
+        else:
+            channel = await self._get_channel(record.get("channel_id"))
+            if channel is None:
+                return None
+            try:
+                await channel.set_permissions(
+                    member,
+                    overwrite=discord.PermissionOverwrite(
+                        view_channel=True, send_messages=True, read_message_history=True
+                    ),
+                    reason=f"Filecab: added {member} to sign as {role} on {filing_id} (DM was blocked)",
+                )
+                channel_msg = await channel.send(
+                    f"{member.mention} — you've been asked to sign as **{signer_spec['label']}** on "
+                    f"this **{spec['title']}** (couldn't DM you — you may have DMs from server members "
+                    "turned off — so you've been added to this channel to sign here instead). Review "
+                    "the document above, then use the buttons below.",
+                    view=view,
+                    allowed_mentions=discord.AllowedMentions(everyone=False, users=[member], roles=False),
+                )
+            except (discord.Forbidden, discord.HTTPException):
+                return None
+            signer_state["channel_message_id"] = channel_msg.id
+            location = "channel"
+
+        record["signers"][role] = signer_state
         published[filing_id] = record
         await guild_conf.published_documents.set(published)
         await self._refresh_review_message(guild, record, spec)
-        return True
+        return location
 
     async def sign(
         self, guild: discord.Guild, filing_id: str, role: str, signer_id: int, field_answers: dict[str, str]
@@ -621,20 +679,26 @@ class FilingManager:
             except discord.Forbidden:
                 pass
 
+        note = "\n\n❌ This filing was denied by staff — no action needed."
         for signer_state in record.get("signers", {}).values():
             if signer_state.get("status") != "pending":
                 continue
             dm_message_id = signer_state.get("dm_message_id")
-            signer_user_id = signer_state.get("user_id")
-            if not dm_message_id or not signer_user_id:
-                continue
-            signer_user = self.bot.get_user(signer_user_id)
-            if not signer_user:
-                continue
+            channel_message_id = signer_state.get("channel_message_id")
             try:
-                dm = await signer_user.create_dm()
-                msg = await dm.fetch_message(dm_message_id)
-                await msg.edit(content=msg.content + "\n\n❌ This filing was denied by staff — no action needed.", view=None)
+                if dm_message_id:
+                    signer_user = self.bot.get_user(signer_state.get("user_id"))
+                    if not signer_user:
+                        continue
+                    dm = await signer_user.create_dm()
+                    msg = await dm.fetch_message(dm_message_id)
+                    await msg.edit(content=msg.content + note, view=None)
+                elif channel_message_id:
+                    channel = await self._get_channel(record.get("channel_id"))
+                    if channel is None:
+                        continue
+                    msg = await channel.fetch_message(channel_message_id)
+                    await msg.edit(content=msg.content + note, view=None)
             except discord.HTTPException:
                 pass
 
