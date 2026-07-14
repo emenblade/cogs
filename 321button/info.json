@@ -1,0 +1,11 @@
+{
+    "author": ["emenblade"],
+    "description": "A self-destruct button that DMs you 6 hours later. Do not press.",
+    "short": "Self-destruct button. Do not press.",
+    "install_msg": "Load with `[p]load 321button`, then run `[p]321button setup` to configure (owner only).",
+    "end_user_data_statement": "This cog stores the timestamp of when a user pressed the button and whether they have been notified. Data can be deleted on request via `[p]mydata forgetme`.",
+    "min_bot_version": "3.5.0",
+    "min_python_version": [3, 10, 0],
+    "tags": ["fun", "button", "self-destruct"],
+    "type": "COG"
+}
