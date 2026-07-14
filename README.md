@@ -80,7 +80,7 @@ Discord-native DOJ document filing. Members pick a document type from a dropdown
 
 ---
 
-## 321button
+## button321
 
 A self-destruct button that DMs you 6 hours after pressing it. Do not press the button.
 
@@ -96,8 +96,8 @@ A self-destruct button that DMs you 6 hours after pressing it. Do not press the 
 
 ```
 [p]repo add cogs https://github.com/emenblade/cogs
-[p]cog install cogs 321button
-[p]load 321button
+[p]cog install cogs button321
+[p]load button321
 [p]321button setup
 ```
 
