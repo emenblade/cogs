@@ -18,16 +18,29 @@ def build_template_options(cog, include_staff_authored: bool = False) -> list[di
 
 
 async def post_document_panel(guild: discord.Guild, config: Config, bot) -> discord.Message | None:
-    """Post (or re-post) the document-type select panel to the configured channel."""
+    """Post (or re-post) the document-type select panel to the configured channel.
+
+    If an old panel message exists (from a previous post), it is deleted first
+    so only one panel is ever live at a time.
+    """
     cog = bot.cogs["Filecab"]
     options = build_template_options(cog)
     if not options:
         return None
 
-    channel_id = await config.guild(guild).document_channel()
+    guild_conf = config.guild(guild)
+    channel_id = await guild_conf.document_channel()
     channel = guild.get_channel(channel_id) if channel_id else None
     if channel is None:
         return None
+
+    old_msg_id = await guild_conf.panel_message_id()
+    if old_msg_id:
+        try:
+            old_msg = await channel.fetch_message(old_msg_id)
+            await old_msg.delete()
+        except (discord.HTTPException, discord.NotFound):
+            pass
 
     embed = discord.Embed(
         title="📁 File a Document",
@@ -36,7 +49,7 @@ async def post_document_panel(guild: discord.Guild, config: Config, bot) -> disc
     )
     view = TemplateSelectView(config, bot, options)
     msg = await channel.send(embed=embed, view=view)
-    await config.guild(guild).panel_message_id.set(msg.id)
+    await guild_conf.panel_message_id.set(msg.id)
     return msg
 
 
