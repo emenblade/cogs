@@ -80,6 +80,37 @@ Discord-native DOJ document filing. Members pick a document type from a dropdown
 
 ---
 
+## 321button
+
+A self-destruct button that DMs you 6 hours after pressing it. Do not press the button.
+
+**Features:**
+- Posts a red "self destruct do not press" button in a channel of your choice
+- Ephemeral "you weren't supposed to press the button" on press
+- Logs every press to a configurable log channel
+- DMs the user 6 hours later: "The self-destruct sequence has been initiated."
+- Persistent view survives bot restarts
+- Owner-only setup, all commands gated via `@commands.is_owner()`
+
+### Install
+
+```
+[p]repo add cogs https://github.com/emenblade/cogs
+[p]cog install cogs 321button
+[p]load 321button
+[p]321button setup
+```
+
+### Commands
+
+| Command | Who | Description |
+|---|---|---|
+| `/321button setup` | Bot Owner | 2-step wizard: pick button channel, pick log channel, posts the button |
+| `/321button repost` | Bot Owner | Re-post the button if the message was deleted |
+| `/321button status` | Bot Owner | Show config and pending notifications |
+
+---
+
 ## gsm-autosync
 
 Watches Docker for game server containers starting/stopping and automatically syncs them to DiscordGSM's database. Status cards appear in Discord without manual setup.

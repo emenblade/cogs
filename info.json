@@ -1,0 +1,8 @@
+{
+    "author": ["emenblade"],
+    "name": "cogs",
+    "short": "Collection of Red-DiscordBot cogs",
+    "description": "A collection of Red-DiscordBot cogs including forms (tickets/applications), filecab (DOJ document filing), gsm_autosync (Docker-to-DiscordGSM sync), and 321button (self-destruct button with delayed DM).",
+    "install_msg": "Thanks for adding my cogs repo!",
+    "end_user_data_statement": "Each cog stores only the data necessary for its function. See individual cog info.json files for details."
+}
