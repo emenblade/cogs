@@ -347,9 +347,10 @@ class _ConfirmFilingView(_ExpiringView):
 
     @discord.ui.button(label="📄 File Document", style=discord.ButtonStyle.blurple)
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
         button.disabled = True
         try:
-            await interaction.response.edit_message(view=self)
+            await interaction.edit_original_response(view=self)
         except discord.HTTPException:
             pass
         await _start_filing_from_select(interaction, self.template_id, defer=False)
