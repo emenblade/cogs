@@ -337,6 +337,28 @@ class _ExpiringView(discord.ui.View):
                 pass
 
 
+class _ConfirmFilingView(_ExpiringView):
+    """Ephemeral view: confirm button shown after selecting a template from the panel."""
+
+    def __init__(self, template_id: str, title: str):
+        super().__init__(timeout=120)
+        self.template_id = template_id
+        self.title = title
+
+    @discord.ui.button(label="📄 File Document", style=discord.ButtonStyle.blurple)
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        button.disabled = True
+        try:
+            await interaction.response.edit_message(view=self)
+        except discord.HTTPException:
+            pass
+        await _start_filing_from_select(interaction, self.template_id, defer=False)
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.grey)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.edit_message(content="Cancelled.", view=None)
+
+
 class TemplateSelectView(discord.ui.View):
     """Persistent view: document-type select posted in the document channel.
 
@@ -358,7 +380,15 @@ class TemplateSelectView(discord.ui.View):
             )
 
         async def callback(self, interaction: discord.Interaction):
-            await _start_filing_from_select(interaction, self.values[0])
+            spec = interaction.client.cogs["Filecab"].templates.get(self.values[0])
+            title = spec["title"] if spec else self.values[0]
+            view = _ConfirmFilingView(self.values[0], title)
+            await interaction.response.send_message(
+                f"**{title}** — ready to file?",
+                view=view,
+                ephemeral=True,
+            )
+            view.message = await interaction.original_response()
 
 
 class StaffFileSelectView(_ExpiringView):
@@ -397,7 +427,7 @@ class StaffFileSelectView(_ExpiringView):
 
 
 async def _start_filing_from_select(
-    interaction: discord.Interaction, template_id: str, *, enforce_gate: bool = True
+    interaction: discord.Interaction, template_id: str, *, enforce_gate: bool = True, defer: bool = True
 ) -> None:
     cog = interaction.client.cogs["Filecab"]
     if enforce_gate:
@@ -406,21 +436,37 @@ async def _start_filing_from_select(
         if allowed_role_ids and not await can_file_template(interaction, allowed_role_ids):
             spec = cog.templates.get(template_id)
             title = spec["title"] if spec else "this document"
-            await interaction.response.send_message(
-                f"⚠️ You don't have permission to file **{title}**.", ephemeral=True
-            )
+            if defer:
+                await interaction.response.send_message(
+                    f"⚠️ You don't have permission to file **{title}**.", ephemeral=True
+                )
+            else:
+                await interaction.followup.send(
+                    f"⚠️ You don't have permission to file **{title}**.", ephemeral=True
+                )
             return
     try:
         dm = await interaction.user.create_dm()
     except discord.Forbidden:
-        await interaction.response.send_message(
-            "⚠️ I couldn't DM you. Please enable DMs from server members and try again.",
-            ephemeral=True,
-        )
+        if defer:
+            await interaction.response.send_message(
+                "⚠️ I couldn't DM you. Please enable DMs from server members and try again.",
+                ephemeral=True,
+            )
+        else:
+            await interaction.followup.send(
+                "⚠️ I couldn't DM you. Please enable DMs from server members and try again.",
+                ephemeral=True,
+            )
         return
-    await interaction.response.send_message(
-        "📬 Check your DMs — I've sent you the first question!", ephemeral=True
-    )
+    if defer:
+        await interaction.response.send_message(
+            "📬 Check your DMs — I've sent you the first question!", ephemeral=True
+        )
+    else:
+        await interaction.followup.send(
+            "📬 Check your DMs — I've sent you the first question!", ephemeral=True
+        )
     await cog.filing.start_filing(interaction.user, interaction.guild, template_id, dm)
 
 
