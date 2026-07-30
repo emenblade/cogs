@@ -1,5 +1,6 @@
 """Main Forms cog class."""
 from __future__ import annotations
+import asyncio
 import discord
 from discord import app_commands
 from redbot.core import Config, commands
@@ -8,6 +9,9 @@ from redbot.core.data_manager import cog_data_path
 from .tickets import TicketManager
 from .applications import ApplicationManager
 from .views import WizardStep1View
+
+_HEARTBEAT_INTERVAL = 600  # seconds between automatic view repair cycles
+_GUILD_REPAIR_DELAY = 2   # seconds between each guild during repair
 
 
 class Forms(commands.Cog):
@@ -18,6 +22,10 @@ class Forms(commands.Cog):
         self.config = Config.get_conf(self, identifier=0x666F726D73, force_registration=True)
         self.tickets = TicketManager(bot, self.config)
         self.applications: ApplicationManager | None = None  # set in initialize()
+        self._heartbeat_task: asyncio.Task | None = None
+
+    async def cog_unload(self) -> None:
+        self._stop_heartbeat()
 
     async def initialize(self) -> None:
         """Register config defaults and initialize sub-managers."""
@@ -50,6 +58,7 @@ class Forms(commands.Cog):
         )
         self.applications.initialize()
         await self._register_persistent_views()
+        self._start_heartbeat()
 
     async def _register_persistent_views(self) -> None:
         """Re-register all persistent views after bot restart."""
@@ -104,6 +113,111 @@ class Forms(commands.Cog):
                             message_id=close_msg_id,
                         )
 
+    def _start_heartbeat(self) -> None:
+        if self._heartbeat_task is None or self._heartbeat_task.done():
+            self._heartbeat_task = asyncio.create_task(self._view_heartbeat())
+
+    def _stop_heartbeat(self) -> None:
+        if self._heartbeat_task is not None and not self._heartbeat_task.done():
+            self._heartbeat_task.cancel()
+            self._heartbeat_task = None
+
+    async def _view_heartbeat(self) -> None:
+        await self.bot.wait_until_red_ready()
+        while True:
+            try:
+                all_guild_data = await self.config.all_guilds()
+                for guild_id_str in all_guild_data:
+                    guild = self.bot.get_guild(int(guild_id_str))
+                    if guild is None:
+                        continue
+                    try:
+                        await self._repair_guild_views(guild)
+                    except Exception:
+                        pass
+                    await asyncio.sleep(_GUILD_REPAIR_DELAY)
+            except Exception:
+                pass
+            await asyncio.sleep(_HEARTBEAT_INTERVAL)
+
+    async def _repair_guild_views(self, guild: discord.Guild) -> tuple[int, int]:
+        from .views import TicketPanelView, CloseTicketView, ApplyView, ReviewView
+
+        guild_conf = self.config.guild(guild)
+        fixed = 0
+        skipped = 0
+
+        ticket_channel_id = await guild_conf.ticket_channel()
+        panel_msg_id = await guild_conf.ticket_panel_message()
+        if ticket_channel_id and panel_msg_id:
+            channel = guild.get_channel(ticket_channel_id)
+            if channel:
+                try:
+                    msg = await channel.fetch_message(panel_msg_id)
+                    view = TicketPanelView(self.config, self.bot)
+                    self.bot.add_view(view, message_id=panel_msg_id)
+                    await msg.edit(view=view)
+                    fixed += 1
+                except Exception:
+                    skipped += 1
+
+        staff_role_id = await guild_conf.ticket_staff_role()
+        all_member_data = await self.config.all_members(guild)
+        for member_data in all_member_data.values():
+            for ticket in member_data.get("open_tickets", []):
+                channel_id = ticket.get("channel_id")
+                msg_id = ticket.get("message_id")
+                if not channel_id or not msg_id:
+                    continue
+                channel = guild.get_channel(channel_id)
+                if not channel:
+                    skipped += 1
+                    continue
+                try:
+                    msg = await channel.fetch_message(msg_id)
+                    view = CloseTicketView(self.config, self.bot, channel_id, staff_role_id)
+                    self.bot.add_view(view, message_id=msg_id)
+                    await msg.edit(view=view)
+                    fixed += 1
+                except Exception:
+                    skipped += 1
+
+        assignments = await guild_conf.application_assignments()
+        for slug, assignment in assignments.items():
+            channel_id = assignment.get("channel_id")
+            apply_msg_id = assignment.get("panel_message_id")
+            if channel_id and apply_msg_id:
+                channel = guild.get_channel(channel_id)
+                if channel:
+                    try:
+                        msg = await channel.fetch_message(apply_msg_id)
+                        view = ApplyView(self.config, self.bot, slug)
+                        self.bot.add_view(view, message_id=apply_msg_id)
+                        await msg.edit(view=view)
+                        fixed += 1
+                    except Exception:
+                        skipped += 1
+
+            for user_id_str, review in assignment.get("active_reviews", {}).items():
+                thread_id = review.get("thread_id")
+                review_msg_id = review.get("review_message_id")
+                if not thread_id or not review_msg_id:
+                    continue
+                try:
+                    thread = await self.bot.fetch_channel(thread_id)
+                    if getattr(thread, "archived", False) or getattr(thread, "locked", False):
+                        skipped += 1
+                        continue
+                    msg = await thread.fetch_message(review_msg_id)
+                    view = ReviewView(self.config, self.bot, slug, int(user_id_str), guild.id)
+                    self.bot.add_view(view, message_id=review_msg_id)
+                    await msg.edit(view=view)
+                    fixed += 1
+                except Exception:
+                    skipped += 1
+
+        return fixed, skipped
+
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:
         """Route DM replies to the application flow."""
@@ -145,89 +259,12 @@ class Forms(commands.Cog):
         Fixes the ticket panel, open ticket close buttons, application Apply buttons,
         and pending review Approve/Deny buttons. Run this after a bot restart if
         buttons show as unresponsive. Already-closed log threads are not touched.
+
+        The heartbeat also runs this automatically every 10 minutes, so you
+        shouldn't normally need to run it manually.
         """
-        from .views import TicketPanelView, CloseTicketView, ApplyView, ReviewView
-
         await ctx.defer(ephemeral=True)
-        guild = ctx.guild
-        guild_conf = self.config.guild(guild)
-        fixed = 0
-        skipped = 0
-
-        # Ticket panel
-        ticket_channel_id = await guild_conf.ticket_channel()
-        panel_msg_id = await guild_conf.ticket_panel_message()
-        if ticket_channel_id and panel_msg_id:
-            channel = guild.get_channel(ticket_channel_id)
-            if channel:
-                try:
-                    msg = await channel.fetch_message(panel_msg_id)
-                    view = TicketPanelView(self.config, self.bot)
-                    self.bot.add_view(view, message_id=panel_msg_id)
-                    await msg.edit(view=view)
-                    fixed += 1
-                except Exception:
-                    skipped += 1
-
-        # Open ticket close buttons
-        staff_role_id = await guild_conf.ticket_staff_role()
-        all_member_data = await self.config.all_members(guild)
-        for member_data in all_member_data.values():
-            for ticket in member_data.get("open_tickets", []):
-                channel_id = ticket.get("channel_id")
-                msg_id = ticket.get("message_id")
-                if not channel_id or not msg_id:
-                    continue
-                channel = guild.get_channel(channel_id)
-                if not channel:
-                    skipped += 1
-                    continue
-                try:
-                    msg = await channel.fetch_message(msg_id)
-                    view = CloseTicketView(self.config, self.bot, channel_id, staff_role_id)
-                    self.bot.add_view(view, message_id=msg_id)
-                    await msg.edit(view=view)
-                    fixed += 1
-                except Exception:
-                    skipped += 1
-
-        # Application Apply buttons and pending review buttons
-        assignments = await guild_conf.application_assignments()
-        for slug, assignment in assignments.items():
-            # Apply panel button
-            channel_id = assignment.get("channel_id")
-            apply_msg_id = assignment.get("panel_message_id")
-            if channel_id and apply_msg_id:
-                channel = guild.get_channel(channel_id)
-                if channel:
-                    try:
-                        msg = await channel.fetch_message(apply_msg_id)
-                        view = ApplyView(self.config, self.bot, slug)
-                        self.bot.add_view(view, message_id=apply_msg_id)
-                        await msg.edit(view=view)
-                        fixed += 1
-                    except Exception:
-                        skipped += 1
-
-            # Pending review Approve/Deny buttons (skip archived/locked threads)
-            for user_id_str, review in assignment.get("active_reviews", {}).items():
-                thread_id = review.get("thread_id")
-                review_msg_id = review.get("review_message_id")
-                if not thread_id or not review_msg_id:
-                    continue
-                try:
-                    thread = await self.bot.fetch_channel(thread_id)
-                    if getattr(thread, "archived", False) or getattr(thread, "locked", False):
-                        skipped += 1
-                        continue
-                    msg = await thread.fetch_message(review_msg_id)
-                    view = ReviewView(self.config, self.bot, slug, int(user_id_str), guild.id)
-                    self.bot.add_view(view, message_id=review_msg_id)
-                    await msg.edit(view=view)
-                    fixed += 1
-                except Exception:
-                    skipped += 1
-
+        fixed, skipped = await self._repair_guild_views(ctx.guild)
         parts = [f"✅ Fixed **{fixed}** button(s)."]
         if skipped:
             parts.append(f"⚠️ {skipped} skipped (message deleted or thread already closed).")

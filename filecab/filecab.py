@@ -11,6 +11,9 @@ from .github_client import GitHubClient
 from .publisher import DocumentPublisher
 from .filing import FilingManager
 
+_HEARTBEAT_INTERVAL = 600
+_GUILD_REPAIR_DELAY = 2
+
 
 class Filecab(commands.Cog):
     """Discord-native DOJ document filing."""
@@ -22,6 +25,7 @@ class Filecab(commands.Cog):
         self.github = GitHubClient(bot)
         self.publisher = DocumentPublisher(self.config, self.github)
         self.filing = FilingManager(bot, self.config, self.templates, self.publisher)
+        self._heartbeat_task: asyncio.Task | None = None
 
     async def initialize(self) -> None:
         """Register config defaults, load templates, and re-register persistent views."""
@@ -59,8 +63,10 @@ class Filecab(commands.Cog):
         )
         self.templates.initialize()
         await self._register_persistent_views()
+        self._start_heartbeat()
 
     async def cog_unload(self) -> None:
+        self._stop_heartbeat()
         await self.github.close()
 
     async def _register_persistent_views(self) -> None:
@@ -101,6 +107,92 @@ class Filecab(commands.Cog):
                         ApprovedDocumentView(filing_id),
                         message_id=message_id,
                     )
+
+    def _start_heartbeat(self) -> None:
+        if self._heartbeat_task is None or self._heartbeat_task.done():
+            self._heartbeat_task = asyncio.create_task(self._view_heartbeat())
+
+    def _stop_heartbeat(self) -> None:
+        if self._heartbeat_task is not None and not self._heartbeat_task.done():
+            self._heartbeat_task.cancel()
+            self._heartbeat_task = None
+
+    async def _view_heartbeat(self) -> None:
+        await self.bot.wait_until_red_ready()
+        while True:
+            try:
+                all_guild_data = await self.config.all_guilds()
+                for guild_id_str in all_guild_data:
+                    guild = self.bot.get_guild(int(guild_id_str))
+                    if guild is None:
+                        continue
+                    try:
+                        await self._repair_guild_views(guild)
+                    except Exception:
+                        pass
+                    await asyncio.sleep(_GUILD_REPAIR_DELAY)
+            except Exception:
+                pass
+            await asyncio.sleep(_HEARTBEAT_INTERVAL)
+
+    async def _repair_guild_views(self, guild: discord.Guild) -> tuple[int, int]:
+        from .views import (
+            TemplateSelectView, FilingReviewView, ApprovedDocumentView,
+            build_template_options,
+        )
+
+        guild_conf = self.config.guild(guild)
+        fixed = 0
+        skipped = 0
+
+        panel_msg_id = await guild_conf.panel_message_id()
+        if panel_msg_id:
+            channel_id = await guild_conf.document_channel()
+            channel = guild.get_channel(channel_id) if channel_id else None
+            if channel:
+                try:
+                    msg = await channel.fetch_message(panel_msg_id)
+                    options = build_template_options(self)
+                    if options:
+                        view = TemplateSelectView(self.config, self.bot, options)
+                        self.bot.add_view(view, message_id=panel_msg_id)
+                        await msg.edit(view=view)
+                        fixed += 1
+                    else:
+                        skipped += 1
+                except Exception:
+                    skipped += 1
+
+        published = await guild_conf.published_documents()
+        for filing_id, record in published.items():
+            spec = self.templates.get(record.get("template_id"))
+            msg_id = record.get("message_id")
+            channel_id = record.get("channel_id")
+            channel = guild.get_channel(channel_id) if channel_id else None
+            if not channel or not msg_id:
+                skipped += 1
+                continue
+            try:
+                msg = await channel.fetch_message(msg_id)
+                if record.get("status") == "pending":
+                    view = FilingReviewView(
+                        self.config, self.bot, filing_id, spec,
+                        record.get("signers", {}),
+                    )
+                    self.bot.add_view(view, message_id=msg_id)
+                    await msg.edit(view=view)
+                    fixed += 1
+                elif record.get("status") == "approved":
+                    view = ApprovedDocumentView(filing_id)
+                    self.bot.add_view(view, message_id=msg_id)
+                    await msg.edit(view=view)
+                    fixed += 1
+                else:
+                    skipped += 1
+            except Exception:
+                skipped += 1
+
+        return fixed, skipped
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:
@@ -237,6 +329,25 @@ class Filecab(commands.Cog):
             return
         view = StaffFileSelectView(options)
         view.message = await ctx.send("Select a document type to file:", view=view, ephemeral=True)
+
+    @filecab_group.command(name="fixbuttons")
+    @commands.admin_or_permissions(administrator=True)
+    async def filecab_fixbuttons(self, ctx: commands.Context) -> None:
+        """Re-attach buttons to all bot messages in this server (admins only).
+
+        Fixes the document panel select, pending review Approve/Deny/Sign buttons,
+        and approved-document Make Public buttons. Run this after a bot restart if
+        buttons show as unresponsive.
+
+        The heartbeat also runs this automatically every 10 minutes, so you
+        shouldn't normally need to run it manually.
+        """
+        await ctx.defer(ephemeral=True)
+        fixed, skipped = await self._repair_guild_views(ctx.guild)
+        parts = [f"✅ Fixed **{fixed}** button(s)."]
+        if skipped:
+            parts.append(f"⚠️ {skipped} skipped (message deleted or channel gone).")
+        await ctx.send(" ".join(parts), ephemeral=True)
 
     @filecab_group.command(name="templates")
     async def filecab_templates(self, ctx: commands.Context) -> None:
