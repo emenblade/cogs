@@ -1,11 +1,14 @@
 """Main Forms cog class."""
 from __future__ import annotations
 import asyncio
+import logging
 import discord
 from discord import app_commands
 from redbot.core import Config, commands
 from redbot.core.bot import Red
 from redbot.core.data_manager import cog_data_path
+
+log = logging.getLogger("red.Forms")
 from .tickets import TicketManager
 from .applications import ApplicationManager
 from .views import WizardStep1View
@@ -115,16 +118,21 @@ class Forms(commands.Cog):
 
     def _start_heartbeat(self) -> None:
         if self._heartbeat_task is None or self._heartbeat_task.done():
+            log.info("View heartbeat started (interval=%ds, guild_delay=%ds)", _HEARTBEAT_INTERVAL, _GUILD_REPAIR_DELAY)
             self._heartbeat_task = asyncio.create_task(self._view_heartbeat())
 
     def _stop_heartbeat(self) -> None:
         if self._heartbeat_task is not None and not self._heartbeat_task.done():
+            log.info("View heartbeat stopped")
             self._heartbeat_task.cancel()
             self._heartbeat_task = None
 
     async def _view_heartbeat(self) -> None:
         await self.bot.wait_until_red_ready()
+        log.info("View heartbeat entering main loop")
         while True:
+            cycle_fixed = 0
+            cycle_guilds = 0
             try:
                 all_guild_data = await self.config.all_guilds()
                 for guild_id_str in all_guild_data:
@@ -132,12 +140,17 @@ class Forms(commands.Cog):
                     if guild is None:
                         continue
                     try:
-                        await self._repair_guild_views(guild)
+                        fixed, skipped = await self._repair_guild_views(guild)
+                        cycle_fixed += fixed
+                        cycle_guilds += 1
+                        if fixed or skipped:
+                            log.info("Heartbeat repaired guild %s: %d fixed, %d skipped", guild.name, fixed, skipped)
                     except Exception:
-                        pass
+                        log.exception("Heartbeat failed for guild %s", guild_id_str)
                     await asyncio.sleep(_GUILD_REPAIR_DELAY)
             except Exception:
-                pass
+                log.exception("Heartbeat cycle error")
+            log.info("Heartbeat cycle complete — %d views repaired across %d guilds", cycle_fixed, cycle_guilds)
             await asyncio.sleep(_HEARTBEAT_INTERVAL)
 
     async def _repair_guild_views(self, guild: discord.Guild) -> tuple[int, int]:
