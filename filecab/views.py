@@ -1,10 +1,13 @@
 """All Discord UI views and modals for the Filecab cog."""
 from __future__ import annotations
+import logging
 from typing import Awaitable, Callable
 import discord
 from redbot.core import Config
 from .template_manager import TemplateManager
 from .utils import can_file_template, can_review, normalize_base_url
+
+log = logging.getLogger("red.Filecab")
 
 
 def build_template_options(cog, include_staff_authored: bool = False) -> list[discord.SelectOption]:
@@ -437,14 +440,27 @@ async def _start_filing_from_select(
         if allowed_role_ids and not await can_file_template(interaction, allowed_role_ids):
             spec = cog.templates.get(template_id)
             title = spec["title"] if spec else "this document"
+            parts = [
+                r.mention if (r := interaction.guild.get_role(rid)) else f"a deleted role (`{rid}`)"
+                for rid in allowed_role_ids
+            ]
+            message = (
+                f"⚠️ You don't have permission to file **{title}** — it's restricted to: "
+                + ", ".join(parts)
+                + "."
+            )
+            log.info(
+                "Gate denied filing of %r to %s (id %s) in guild %s — requires roles %s",
+                template_id,
+                interaction.user.display_name,
+                interaction.user.id,
+                interaction.guild.id,
+                allowed_role_ids,
+            )
             if defer:
-                await interaction.response.send_message(
-                    f"⚠️ You don't have permission to file **{title}**.", ephemeral=True
-                )
+                await interaction.response.send_message(message, ephemeral=True)
             else:
-                await interaction.followup.send(
-                    f"⚠️ You don't have permission to file **{title}**.", ephemeral=True
-                )
+                await interaction.followup.send(message, ephemeral=True)
             return
     try:
         dm = await interaction.user.create_dm()
